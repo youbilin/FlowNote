@@ -12,7 +12,17 @@
 
 两种模式共用账号隔离、延迟 / 冲突日志、并发缓存、日志轮转、异常上游、页面 / JSON / 文本 / HEAD、历史持久化与损坏回退检查。使用模拟面板和 Xray 发送端，仍需 README 中的真实双账号验收。
 
-UI 沿用 v0.3.1 布局，仅更新版本号，此前视觉和发布记录如下。v0.3.2 公开发布验证结果会在完成后补充。
+## v0.3.2 公开发布验证
+
+2026-11-14：[CI](https://github.com/youbilin/FlowNote/actions/runs/43586884263) 全部通过；[Release 工作流](https://github.com/youbilin/FlowNote/actions/runs/43597862401) 的原生 Linux amd64、arm64 与发布任务全部通过，[v0.3.2](https://github.com/youbilin/FlowNote/releases/tag/v0.3.2) 已公开。
+
+- 重新从公开 Release 下载两个归档、install.sh 和 SHA256SUMS：清单中的三个文件校验全部通过。
+- 两个归档的文件清单、文件类型、HTTP / HTTPS 模板与 HTTP 路由片段检查通过。
+- readelf 确认分别为 X86-64 / AArch64，均无动态解释器。
+- 实际下载的 amd64 程序报告 `flownote 0.3.2`，再次通过 37 项 HTTP 与 39 项 TLS / PROXY 集成检查。
+- 实际下载的发布版 install.sh 以 `--version v0.3.2 --download-only` 从 GitHub 下载、校验并保存 amd64 离线包成功。没有在用户服务器执行 root 安装，也未把模拟集成测试视为真实 Xray 验收。
+
+UI 沿用 v0.3.1 布局，仅更新版本号。此前视觉和发布记录如下。
 
 ---
 
