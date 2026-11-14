@@ -16,8 +16,9 @@ Do not open a public issue with exploitation details or real user data. Include 
 - Source-to-account correlation is topology-dependent. Mux, CDN frontends, and accounts sharing underlying connections are unsupported.
 - Observed conflicts fail closed, but delayed log entries can leave conflicts unobserved. Two-account real deployment validation is required; local simulated tests do not prove isolation for every deployment.
 - Keep the listener on loopback. Do not expose it through port forwarding or a conventional reverse proxy. Untrusted local processes can forge PROXY metadata.
-- Use a dedicated service user, restricted log/token/key permissions, a valid certificate, and the smallest usable panel API scope.
-- HTTPS protects transmission. It does not establish that a log-based account association is correct.
+- Use a dedicated service user, restricted log/token/key permissions, and the smallest usable panel API scope.
+- Default HTTP at `6.6.6.6` requires client routing through the correct authenticated encrypted node tunnel and an exact server-side interception rule. The IP is a real public address, not project infrastructure. HTTP provides no independent origin authentication or integrity; direct routing, an unencrypted LAN proxy hop, or a compromised node remain risks.
+- Optional HTTPS requires a valid certificate. HTTPS protects transmission. It does not establish that a log-based account association is correct.
 
 See [the design document](docs/DESIGN.md) and [deployment acceptance checks](docs/DEPLOYMENT.md) for the complete operational assumptions.
 

@@ -1,3 +1,21 @@
+# v0.3.2 验证记录
+
+日期：2026-11-14。Debian / WSL，Rust 1.94.1。
+
+- cargo fmt / clippy --all-targets：通过。
+- cargo test --locked：34 个单元测试通过，含 HTTP / 旧 HTTPS 兼容与错误混合配置拒绝。
+- cargo build --locked：通过。
+- e2e.py --http：37 项通过，不生成证书，验证真实 TCP / PROXY / HTTP、Host / 端口、无 HSTS 及转发头不能改变传输模式。
+- e2e.py：39 项 HTTPS 检查通过，含证书 / SNI 与按协议校验的 Host / HSTS。
+- bash -n / shellcheck：两个发布脚本通过。
+- installer.py：8 组通过，包内清单包含新增 HTTPS 模板和路由片段。
+
+两种模式共用账号隔离、延迟 / 冲突日志、并发缓存、日志轮转、异常上游、页面 / JSON / 文本 / HEAD、历史持久化与损坏回退检查。使用模拟面板和 Xray 发送端，仍需 README 中的真实双账号验收。
+
+UI 沿用 v0.3.1 布局，仅更新版本号，此前视觉和发布记录如下。v0.3.2 公开发布验证结果会在完成后补充。
+
+---
+
 # v0.3.1 验证记录
 
 日期：2026-11-14。构建环境：本机 Debian/WSL，Rust 1.94.1；Windows 原生默认 MSVC 缺少 link.exe，因此没有将 Windows 原生编译冒充成功。部署目标为 Linux。

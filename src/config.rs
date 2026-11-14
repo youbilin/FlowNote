@@ -6,7 +6,7 @@ use std::{net::SocketAddr, path::PathBuf};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub server: ServerCfg,
-    pub tls: TlsCfg,
+    pub tls: Option<TlsCfg>,
     pub xray: XrayCfg,
     pub panel: PanelCfg,
     #[serde(default)]
@@ -21,8 +21,26 @@ pub struct ServerCfg {
     #[serde(default = "d_listen")]
     pub listen: SocketAddr,
     pub domain: String,
+    #[serde(default)]
+    pub protocol: Protocol,
     #[serde(default = "d_max_conns")]
     pub max_conns: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    Http,
+    #[default]
+    Https,
+}
+impl Protocol {
+    pub fn port(self) -> u16 {
+        match self {
+            Self::Http => 80,
+            Self::Https => 443,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -137,21 +155,34 @@ impl Config {
             bail!("history requires an absolute directory, retention_days 1..=90 and sample_interval_secs 300..=86400");
         }
         let d = &self.server.domain;
-        if d.len() > 253
-            || !d.contains('.')
-            || d.ends_with(".local")
-            || d.parse::<std::net::IpAddr>().is_ok()
-            || d.split('.').any(|label| {
-                label.is_empty()
-                    || label.len() > 63
-                    || label.starts_with('-')
-                    || label.ends_with('-')
-                    || !label
+        let ipv4 = d
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.to_string() == *d);
+        let hostname = d.len() <= 253
+            && d.contains('.')
+            && !d.bytes().all(|c| c.is_ascii_digit() || c == b'.')
+            && !d.ends_with(".local")
+            && d.parse::<std::net::IpAddr>().is_err()
+            && d.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
                         .bytes()
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-            })
-        {
-            bail!("server.domain 必须为小写 ASCII 自有域名，不含协议、端口、路径；不支持 .local 和 IP");
+            });
+        match self.server.protocol {
+            Protocol::Http => {
+                if !(hostname || ipv4) || self.tls.is_some() {
+                    bail!("HTTP requires a hostname or canonical IPv4 server.domain and no [tls] section");
+                }
+            }
+            Protocol::Https => {
+                if !hostname || self.tls.is_none() {
+                    bail!("HTTPS requires a lowercase ASCII hostname and a [tls] certificate configuration");
+                }
+            }
         }
         if !(1..=1024).contains(&self.server.max_conns) {
             bail!("server.max_conns 必须在 1..=1024");
@@ -228,7 +259,9 @@ mod tests {
         for domain in [
             "traffic.local",
             "https://traffic.example.com",
-            "127.0.0.1",
+            "6.6.6.6:80",
+            "[::1]",
+            "6.6.6.999",
             "-bad.example.com",
             "a..example.com",
         ] {
@@ -273,6 +306,29 @@ mod tests {
         let mut c = sample();
         c.history.sample_interval_secs = 1;
         assert!(c.validate().is_err());
+    }
+    #[test]
+    fn http_and_legacy_https_modes_are_explicit() {
+        let c = sample();
+        assert_eq!(c.server.protocol, Protocol::Http);
+        assert!(c.tls.is_none());
+        let raw = include_str!("../deploy/config.https.example.toml");
+        let legacy: Config = toml::from_str(raw).unwrap();
+        assert_eq!(legacy.server.protocol, Protocol::Https);
+        legacy.validate().unwrap();
+        let mut c = legacy.clone();
+        c.tls = None;
+        assert!(c.validate().is_err());
+        let mut c = legacy.clone();
+        c.server.domain = "6.6.6.6".into();
+        assert!(c.validate().is_err());
+        let mut c = legacy;
+        c.server.protocol = Protocol::Http;
+        assert!(c.validate().is_err());
+        assert!(
+            toml::from_str::<Config>(&raw.replace("[server]", "[server]\nprotocol = 'auto'"))
+                .is_err()
+        );
     }
     #[test]
     fn rejects_legacy_debug_override() {

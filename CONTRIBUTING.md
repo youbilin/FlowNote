@@ -16,6 +16,7 @@ cargo clippy --locked -- -D warnings
 cargo test --locked
 cargo build --locked
 python3 tests/e2e.py target/debug/flownote
+python3 tests/e2e.py target/debug/flownote --http
 ```
 
 The integration test starts only local fixture services and creates a temporary test certificate. It does not require a real panel. Keep `Cargo.lock` committed and use `--locked` when validating reproducibility.

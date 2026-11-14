@@ -9,7 +9,7 @@
 面向 3x-ui 拼节点用户的轻量流量查询页。无需开启面板订阅，无需用户登录。
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.1-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.2-246852)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust&logoColor=white)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -25,7 +25,7 @@
 
 “还剩多少流量？什么时候到期？”对于共用一台服务器、分别拥有独立账号的用户，这两个问题不应该需要进入管理面板，也不应该要求把账号凭据交给一个查询网站。
 
-FlowNote 提供一张只读的流量手记：用户先连接管理员分配的节点，再打开专用 HTTPS 链接。服务通过 Xray 的连接来源与访问日志关联当前账号，从面板读取对应统计，展示剩余流量、配额与有效期。**不依赖面板订阅功能，也不需要在页面填写账号、UUID 或订阅链接。**
+FlowNote 提供一张只读的流量手记：用户先连接管理员分配的节点，再打开专用查询链接。服务通过 Xray 的连接来源与访问日志关联当前账号，从面板读取对应统计，展示剩余流量、配额与有效期。**不依赖面板订阅功能，也不需要在页面填写账号、UUID 或订阅链接。**
 
 > [!IMPORTANT]
 > **v0.3 为早期版本，上线前需要真实双账号验收。** 来源与日志的关联依赖部署拓扑，不支持 Mux、CDN 或多个账号共享底层连接的场景。已通过本地模拟集成测试，尚未完成真实 3x-ui / Xray 环境验证。详见[支持范围](#支持范围)和[安全边界](docs/DESIGN.md#2-数据链路与身份边界)。
@@ -59,143 +59,316 @@ FlowNote 提供一张只读的流量手记：用户先连接管理员分配的�
 | 便捷安装 | Linux amd64 / arm64 静态安装包、校验清单和安装脚本；首次启动前配置域名与面板 |
 | 看清有效期 | 到期时间、时区、最近在线；正确区分无限套餐与首次使用计时 |
 | 状态有反馈 | 正常、低流量、用尽、过期、停用及友好错误页 |
-| HTTPS 入口 | 自有域名与证书，原生 TLS，核对 SNI / Host |
+| HTTP / HTTPS 入口 | 默认 `http://6.6.6.6/`，也兼容自有域名 HTTPS |
 | 少一步操作 | 用户无需登录、无需启用面板订阅；管理员配置面板 API Token |
 | 适配日常使用 | 手机与桌面响应式布局、系统深色模式、键盘焦点 |
 | 输出可组合 | HTML、纯文本和 JSON；提供 `GET` / `HEAD` |
 | 克制的前端 | 服务端渲染，无 JavaScript、无外部字体、无统计脚本、无浏览器存储 |
 | 有界服务 | 并发与超时限制、短期缓存、响应大小限制；已观察到来源冲突时拒绝返回数据 |
 
-## 快速开始
+<a id="快速开始"></a>
 
-### 先确认这四件事
+## 快速开始：使用 http://6.6.6.6/
 
-- **同机部署**：Linux 上的 FlowNote 与 Xray 位于同一主机、同一网络命名空间。
-- **面板接口**：你的 3x-ui 支持 API Token 与 `/panel/api/clients/traffic/{email}`。无需开启订阅；不兼容旧版 Cookie 登录。
-- **域名证书**：准备自有查询子域名及有效证书，建议使用 DNS-01 续期，不套 CDN。
-- **来源可关联**：查询域名经过对应节点，开启 access log，禁用该场景的 Mux，并完成双账号实测。
+**不需要买域名、不需要 DNS 解析、不需要证书，也不需要开启面板订阅。** 管理员在服务器配置一次，普通用户连接自己的节点，打开 **`http://6.6.6.6/`** 即可查看自己的流量。
 
-### 1. 安装（Linux amd64 / arm64）
+这里的 `6.6.6.6` 是约定的查询入口。它是一个真实公网 IP，并不属于本项目；必须由客户端送入节点，再由服务器 Xray 精确截获。**不向这个 IP 的真实主机发起查询，不把它绑定到网卡，也不把它指向 VPS。**
 
-在有 systemd 的服务器上执行，安装时自动识别架构，无需 Rust：
-
-```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.1/install.sh | sudo bash -s -- --version v0.3.1
+```text
+浏览器 http://6.6.6.6/
+  → 本地代理：6.6.6.6/32 走自己的节点
+  → 服务器 Xray：6.6.6.6 TCP 80 → traffic-query 出站
+  → freedom：PROXY v2 + HTTP → 127.0.0.1:8686
+  → FlowNote：关联 access.log 中的账号 → 面板 API → 当前账号流量
 ```
 
-脚本从固定版本 Release 下载静态 musl 包，核对 SHA-256、包内路径与二进制版本，创建服务用户并安装 systemd 单元。**已有配置、Token 和证书会保留；首次安装完成后仍需填写下面的接入配置。** 已运行的服务会在升级时重启，旧二进制留作回退。
+### 1. 确认环境
 
-希望先审阅脚本，或只下载离线安装包：
+- Linux VPS，有 systemd；已运行 3x-ui 和 Xray。
+- FlowNote 与 Xray 在同一主机、**同一网络命名空间**。下面按直接安装讲解；Docker 内的 `127.0.0.1` 不是宿主机回环，请先处理容器网络。
+- 面板支持 API Token 和 `GET /panel/api/clients/traffic/{email}`。API 与订阅功能独立；没有此接口时，需要先确认面板兼容性。
+- 每个用户有唯一的 client email 标签；查询连接禁用 Mux、多账号共享底层连接，以及会合并来源的 CDN / 反向代理。客户端选择实际要查的账号节点。
+
+### 2. 一键安装
+
+支持 **Linux amd64 / arm64**，自动识别架构，使用预编译静态二进制，不需要在 VPS 上编译 Rust：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.1/install.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.2/install.sh | sudo bash -s -- --version v0.3.2
+```
+
+安装脚本下载固定版本、校验 SHA-256、包内路径和二进制版本，然后安装程序与 systemd 服务。**首次安装不会自动启动未配置的服务，也不会修改你的 Xray 配置。** 已有的配置、Token、证书和历史数据会保留；活动服务升级时会短暂重启。
+
+想先审阅脚本，或只下载离线包：
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.2/install.sh
 less install.sh
-sudo bash install.sh --version v0.3.1
-# 仅下载并校验，不修改系统：
-bash install.sh --version v0.3.1 --download-only ./flownote-download
+sudo bash install.sh --version v0.3.2
+# 只下载并校验，不安装：
+bash install.sh --version v0.3.2 --download-only ./flownote-download
 ```
 
-[预编译包与 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.1) · [安装与升级细节](docs/DEPLOYMENT.md#安装包与安装脚本)
+[预编译包及 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.2)。清单用于发现下载损坏，不是独立签名。
 
-<details>
-<summary>从源码构建</summary>
+### 3. 填写面板 Token 和服务配置
+
+在面板中创建有流量查询权限的 API Token。下面通过编辑器保存，避免把真实 Token 放入命令历史：
+
+```bash
+sudo touch /etc/flownote/token
+sudo chown root:flownote /etc/flownote/token
+sudo chmod 640 /etc/flownote/token
+sudo nano /etc/flownote/token
+sudo nano /etc/flownote/config.toml
+```
+
+`token` 文件只放 Token 本身，不加 `Bearer `、引号或 TOML 字段。`config.toml` 的完整 HTTP 示例：
+
+```toml
+[server]
+listen = "127.0.0.1:8686"
+protocol = "http"
+domain = "6.6.6.6"
+max_conns = 128
+
+[xray]
+access_log = "/usr/local/x-ui/access.log"
+outbound_tag = "traffic-query"
+lookup_timeout_ms = 1500
+entry_ttl_secs = 600
+
+[panel]
+base_url = "http://127.0.0.1:2053"
+token_file = "/etc/flownote/token"
+cache_ttl_secs = 5
+timeout_secs = 5
+
+[display]
+title = "流量笺"
+tz_offset_hours = 8
+
+[history]
+enabled = true
+directory = "/var/lib/flownote/history"
+retention_days = 30
+sample_interval_secs = 3600
+```
+
+需要按实际环境修改 **面板端口、面板路径、日志路径和 Token**。例如面板登录地址是 `http://127.0.0.1:2053/my-secret-path/`，则 `base_url = "http://127.0.0.1:2053/my-secret-path"`，不要再拼 `/panel/api`。远程面板必须使用正常验证证书的 HTTPS；本机回环面板可用 HTTP。
+
+`domain` 在 HTTP 模式表示允许的 Host，直接保留 `6.6.6.6`，**不带 `http://`、端口或斜杠**。HTTP 配置不添加 `[tls]`。`listen` 保留回环地址；不要开放或转发公网 8686，也不需要在 VPS 公网监听 80。
+
+### 4. 开启 Xray 访问日志，并赋予读取权限
+
+在 3x-ui 的 **Xray 配置** 中合并日志设置；面板菜单名称随版本变化，日志路径必须与上一步一致：
+
+```json
+"log": {
+  "access": "/usr/local/x-ui/access.log",
+  "loglevel": "warning"
+}
+```
+
+保留已有 error 等配置。保存并重启 Xray 后，确认日志实际生成。FlowNote 服务用户需要能穿过父目录并读取该文件。以这个路径为例，Debian / Ubuntu 可安装 ACL 工具后授权：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y acl
+sudo setfacl -m u:flownote:--x /usr/local/x-ui
+sudo setfacl -m u:flownote:r-- /usr/local/x-ui/access.log
+sudo -u flownote test -r /usr/local/x-ui/access.log && echo 'access log readable'
+```
+
+路径不存在时先检查 Xray 的实际日志位置及写入权限；使用其他目录时相应替换。若仍不可读，用 `namei -l /usr/local/x-ui/access.log` 检查各级父目录。**只给专用日志文件读取权限，不要递归开放整个面板目录。** 日志轮转后要对新文件保留相同权限，例如在实际 logrotate 配置的 `postrotate` 中对该日志重新执行 `setfacl -m u:flownote:r-- ...`。不要给包含面板数据库的目录设置宽泛的默认读取 ACL。
+
+日志应包含查询连接的来源 `IP:端口`、出站标签 `traffic-query` 和 `email`。没有唯一的 email，FlowNote 会拒绝返回账号数据。
+
+### 5. 合并 Xray 出站和路由
+
+下面是要合并的部分，**不是完整配置**。先备份当前 Xray 配置，在面板管理的持久化配置位置修改；不要直接用片段覆盖整个文件，避免丢失已有节点。
+
+在现有 `outbounds` 数组**末尾追加**：
+
+```json
+{
+  "tag": "traffic-query",
+  "protocol": "freedom",
+  "settings": {
+    "redirect": "127.0.0.1:8686",
+    "proxyProtocol": 2
+  }
+}
+```
+
+若原来没有名为 `block` 的出站，再追加一个：
+
+```json
+{"tag": "block", "protocol": "blackhole", "settings": {}}
+```
+
+保留原本的默认出站位置，不要把 `traffic-query` 放到出站数组第一项。然后把以下两条**按此顺序放到 `routing.rules` 数组最前面**，位于直连、私网拦截、广告拦截和其他兜底规则之前：
+
+```json
+[
+  {
+    "type": "field",
+    "network": "tcp",
+    "ip": ["6.6.6.6/32"],
+    "port": "80",
+    "outboundTag": "traffic-query"
+  },
+  {
+    "type": "field",
+    "network": "tcp,udp",
+    "ip": ["6.6.6.6/32"],
+    "outboundTag": "block"
+  }
+]
+```
+
+第一条只把目标 `6.6.6.6:80` 的 TCP 请求转入 FlowNote。第二条阻止这个入口的其他端口和 UDP 流量在服务器端误连真实地址；因此 **`https://6.6.6.6/` 不提供服务**。不要写成将所有 80 端口流量都转进来。
+
+完整可合并片段见 [`deploy/xray-snippet.json`](deploy/xray-snippet.json)，安装后也在 `/usr/local/share/flownote/xray-snippet.json`。片段中的说明字段和 `outbounds_append` / `routing_rules_insert_first` 是合并提示，不能原样作为 Xray 顶层字段保存。
+
+某些新版 Xray 的 freedom 会在最终拨号阶段默认拦截私网地址。如果日志提示 `127.0.0.1:8686` 被拦截，且你的版本支持 `finalRules`，仅在 **traffic-query 的 `settings`** 里额外加入：
+
+```json
+"finalRules": [
+  {"action": "allow", "network": "tcp", "ip": ["127.0.0.1"], "port": "8686"}
+]
+```
+
+旧版不认识此字段时不添加；以 Xray 配置检查与启动日志为准。不要全局放开私网。字段语义见 [Xray freedom 官方文档](https://xtls.github.io/config/outbounds/freedom.html)。
+
+保存后重启 Xray，确认原有节点仍能正常连接；后续面板更新配置时也要保留这些规则。
+
+### 6. 客户端分流：让入口走自己的节点
+
+**Clash / Mihomo**：在实际生效配置的 `rules` 最前面加入以下规则，或使用客户端的覆写 / 扩展规则功能，避免订阅更新覆盖：
+
+```yaml
+rules:
+  - IP-CIDR,6.6.6.6/32,你的节点或策略组,no-resolve
+  # 原有规则继续放在后面
+```
+
+将 `你的节点或策略组` 替换为真实名称。若用策略组，组内选择这台服务器上、属于你自己的账号节点；不要选 `DIRECT`，也不要用混有不同账号的随机或负载均衡组。使用规则模式，并确保浏览器已被**系统代理、TUN 或浏览器代理**接管。只有写规则、没有让浏览器走代理，仍然无效。
+
+**其他客户端**：配置同样的目标规则：`6.6.6.6/32 → 自己的节点`，并确认优先级高于直连规则。如果客户端没有规则编辑功能，可以先让全部浏览器流量通过指定节点验证，再按其支持方式添加精确规则。
+
+不需要改 DNS、hosts 或 Fake-IP 映射。此入口使用 IPv4 字面量，关键是代理是否接管请求、是否选对节点。跨账号 Mux / 连接复用必须关闭。
+
+### 7. 验证面板并启动服务
+
+先用该节点实际配置的 email 验证面板权限；这个命令直接在服务器查询面板，执行后退出，不经过浏览器或 Xray：
+
+```bash
+sudo -u flownote /usr/local/bin/flownote /etc/flownote/config.toml --check-panel '真实的-client-email'
+sudo systemctl enable --now flownote
+sudo systemctl status flownote --no-pager
+sudo journalctl -u flownote -n 50 --no-pager
+sudo ss -lntp | grep ':8686'
+```
+
+监听应为 `127.0.0.1:8686`。普通 `curl http://127.0.0.1:8686/` 会被拒绝，因为该端口要求 Xray 提供 PROXY 头，不能用它代替经过节点的完整验收。
+
+### 8. 用户打开页面
+
+连接自己的节点，在浏览器地址栏输入完整地址：
+
+```text
+http://6.6.6.6/
+```
+
+成功后只显示流量数字、上传、下载、总配额、有效期、状态和已有的历史曲线。无需登录、填写账号、提供订阅链接或面板 Token。浏览器可能显示“不安全”，因为这里使用 HTTP；若浏览器自动升级到 HTTPS，需为这个地址允许 HTTP 或关闭该站点的 HTTPS 自动升级。
+
+在**用户电脑**上也可通过本地 SOCKS 代理检查；下面 `7891` 只是示例端口，换成客户端实际 SOCKS 端口：
+
+```bash
+curl --proxy socks5h://127.0.0.1:7891 'http://6.6.6.6/?format=text'
+curl --proxy socks5h://127.0.0.1:7891 'http://6.6.6.6/json'
+```
+
+### 9. 交给其他用户前，做双账号验收
+
+用两个有不同流量的真实账号 A / B，分别经各自节点访问同一个入口，核对账号、上传下载、配额和有效期与面板一致。再检查同一 Wi-Fi / NAT 下两账号并发、断线重连及 access log 轮转后的结果。切换账号时也要切换实际节点连接，避免复用旧连接。
+
+来源无法识别应返回 403；上游查询异常返回 502；出现串号就先停止对外提供查询，检查 Mux、共享来源和日志关联。现有自动化测试模拟面板、日志和 PROXY 发送端，不能替代目标服务器上的真实 Xray 联调。
+
+### HTTP 的保护范围
+
+HTTP 本身没有网站身份验证或防篡改保护。若浏览器请求完整进入已认证、加密的节点隧道，并在服务器内通过回环到 FlowNote，中间运营商和公共 Wi-Fi 无法直接读取或篡改隧道内内容；但错误直连、浏览器到局域网代理之间的明文链路、失陷的节点仍有风险。它不等同于浏览器到 FlowNote 的独立 HTTPS 保护。
+
+本方案不向用户下发面板 Token / UUID / subId，响应禁止缓存，8686 只在回环监听。仍需信任本机进程与节点管理员；这些措施不能给 HTTP 增加 TLS。
+
+## 常见问题
+
+| 现象 | 检查位置 |
+| --- | --- |
+| 超时、连接失败、打开其他网页 | 浏览器是否被代理接管；客户端是否 `DIRECT`；Xray 精确规则是否排在前面；FlowNote 是否启动 |
+| `https://6.6.6.6/` 打不开 | 使用完整 `http://6.6.6.6/`；检查浏览器 HTTPS 自动升级 |
+| 403 / 还没识别到节点 | access log 路径、读取权限、email、traffic-query 标签；关闭 Mux / 共享来源；确认查的是正确节点 |
+| 421 / 入口地址不正确 | `server.domain` 应为 `6.6.6.6`，不附协议、端口、路径；请求 Host 必须匹配 |
+| 502 / 数据暂时没有送达 | 运行 `--check-panel`；核对 Token 权限、端口、webBasePath 和 API 兼容性 |
+| Xray 报私网目标被阻止 | 查看本版本 freedom 的 `finalRules` 支持；只对查询出站放行本机 8686 |
+| 服务启动失败 | `journalctl -u flownote`；HTTP 使用 `protocol = "http"` 并移除 `[tls]` |
+| 安装升级后仍要求证书 | 安装脚本保留旧配置；按本 README 手动迁移，不能只改浏览器地址 |
+| 日志轮转后无法识别 | 新日志是否仍可读、父目录能否进入；修正轮转创建权限或 scoped ACL hook |
+| 曲线为空或只有一个点 | 查询时才采样；积累至少两个不同时间点才有趋势，没有过去的每日账单 |
+| 用户已过期 / 停用后无法查询 | 如果 Xray 已拒绝该账号建立连接，此入口也可能无法访问 |
+
+## 历史曲线
+
+默认保留 30 天的查询采样，通常每小时最多新增一个点。曲线显示**按查询时间观察到的累计上传 / 下载**，不是后台定时采集的每日用量；不会回填安装前的数据。计数下降时记录重置点并断开折线。`retention_days` 可设 1–90，采样间隔 300–86400 秒；不需要曲线时设置 `history.enabled = false`。
+
+数据保存在 `/var/lib/flownote/history`，按账号散列文件名隔离，只含时间、上传、下载。清理由有效查询触发，停止服务后不会自动清理；清空历史前先停止服务，再删除该目录下的采样文件并恢复服务。详细资源限制见[架构设计](docs/DESIGN.md)。
+
+## HTTPS 兼容与升级
+
+已有 HTTPS 部署继续可用，旧配置不写 `server.protocol` 时仍默认 HTTPS。模板见 [`config.https.example.toml`](deploy/config.https.example.toml) 和 [`xray-https-snippet.json`](deploy/xray-https-snippet.json)。HTTPS 需要自有域名及浏览器信任的证书；可通过 DNS-01 取得证书，无需把查询域名的 A / AAAA 记录指向 VPS。分流仍须将该域名送进对应节点。
+
+从 HTTPS 切到本方案：备份配置 → 设置 `protocol = "http"`、`domain = "6.6.6.6"` → 移除 `[tls]` → 更换服务端路由与客户端规则 → 重启 FlowNote / Xray → 双账号验收。修改配置前先安装支持此模式的 **v0.3.2 或更新版本**。回退 v0.3.1 前应恢复旧 HTTPS 配置、证书和两端路由。
+
+## 界面预览与源码构建
 
 ```bash
 git clone https://github.com/youbilin/FlowNote.git
 cd FlowNote
 cargo build --release --locked
-```
-
-需要 Rust 工具链和 C 编译工具；服务配置见部署指南。
-
-</details>
-
-### 2. 配置与接入
-
-从 [`deploy/config.example.toml`](deploy/config.example.toml) 开始，设置查询域名、证书完整链、私钥、Xray access log 和面板 API Token。按[部署指南](docs/DEPLOYMENT.md#部署)创建专用服务用户，并合并 [Xray 配置片段](deploy/xray-snippet.json)。
-
-先验证面板连通性，命令执行后退出，不启动查询监听：
-
-```bash
-sudo -u flownote /usr/local/bin/flownote /etc/flownote/config.toml   --check-panel '真实的-client-email'
-```
-
-安装并启动 [`flownote.service`](deploy/flownote.service) 后，完成[双账号上线验收](docs/DEPLOYMENT.md#6-双账号上线验收必须)，再将查询链接交给用户。
-
-### 3. 连接节点，打开查询页
-
-```text
-https://traffic.你的域名/
-```
-
-浏览器显示网页。终端也可读取文本或 JSON，请确保请求经过对应代理；下方域名和本地代理端口均为示例：
-
-```bash
-curl --proxy socks5h://127.0.0.1:1080 https://traffic.example.com/
-curl --proxy socks5h://127.0.0.1:1080 https://traffic.example.com/json
-```
-
-### 只想先看看界面？
-
-```bash
 cargo run --locked -- --preview output/preview
 ```
 
-直接打开 `output/preview/index.html` 即可查看。命令生成正常、低流量、用尽、过期、停用、不限、未激活、403、502 共九种合成页面，**不需要配置、令牌、证书或真实面板，也不会启动服务**。
-
-## 它如何工作
-
-```mermaid
-flowchart LR
-    U[用户浏览器] -->|HTTPS 经自己的节点| X[Xray]
-    X -->|域名 TCP 443 路由| F[freedom 出站]
-    F -->|PROXY 头 + 原始 TLS| N[FlowNote · 仅回环监听]
-    X -->|access.log| L[来源与账号索引]
-    L --> N
-    N -->|对应 email 的只读查询| P[3x-ui API]
-    P -->|流量统计| N
-    N -->|HTML / JSON / 文本| U
-```
-
-FlowNote 先读取 PROXY 头，再完成 TLS 握手；通过服务端日志关联账号，并检查面板返回的 email 是否一致。客户端参数、`X-Forwarded-For` 或 Cookie 不能用于选择要查询的账号。
-
-**8686 只监听回环地址，不应开放公网、做 DNAT 或放到普通 HTTP 反向代理后面。** 本机不可信进程仍可能伪造 PROXY 头；详细信任模型见[架构与安全设计](docs/DESIGN.md)。
+源码构建需要 Rust 和 C 编译工具；预览命令生成九种合成状态的静态 HTML，不连接真实面板，直接打开 `output/preview/index.html` 即可。
 
 ## 支持范围
 
-| 场景 | v0.3 状态 |
-| --- | --- |
-| 单 VPS、同机 Xray、非复用连接 | 目标部署方式；仍需实机验收 |
-| IPv4 / IPv6 与 PROXY v1 / v2 | 已有解析与单元测试覆盖 |
-| API Token 面板 | 必需，接口权限由实际面板版本决定 |
-| 面板订阅关闭 | 支持，不依赖订阅接口 |
-| Mux、CDN、多账号共享来源 | 不支持，可能导致身份关联不唯一 |
-| 远程面板 | 仅允许证书正常验证的 HTTPS；回环面板可 HTTP |
-| 账号已停用或超限，Xray 拒绝连接 | 无法保证查询页仍可访问 |
-| 多 VPS 汇总、分组、主动提醒 | 不在本项目当前范围 |
+单 VPS、同机 Xray、API Token 面板、面板订阅关闭；支持 HTTP 和自有域名 HTTPS，PROXY v1 / v2，HTML / 文本 / JSON。IPv4 / IPv6 来源均有解析覆盖；HTTP 入口的配置 Host 当前支持 IPv4 字面量或域名，不支持 IPv6 字面量。
 
-版本直接从原型 v0.1 推进至 v0.3；跳过 v0.2，不规划 v0.4。当前重点是把单机、自助、只读查询做好。
+不支持 Mux、CDN、多账号共享底层连接，也不做多 VPS 汇总、分组和主动提醒。跳过 v0.2，不规划 v0.4，当前专注普通用户的只读流量查询。
 
 ## 验证与贡献
 
 ```bash
 cargo fmt --check
-cargo clippy --locked -- -D warnings
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo build --locked
 python3 tests/e2e.py target/debug/flownote
+python3 tests/e2e.py target/debug/flownote --http
+python3 tests/installer.py
 ```
 
-本地记录：**33 个单元测试、35 项 TLS / PROXY 集成检查、8 组安装脚本检查通过**；Playwright 检查桌面、手机、深色与错误状态。集成测试使用本机临时证书、模拟面板与日志，不替代真实 3x-ui / Xray 验收。CI 状态以页首的实际运行结果为准。
+HTTP / HTTPS 共用账号隔离、日志关联与上游异常检查。具体本地结果和真实环境的验收边界见[测试记录](docs/TESTING.md)，持续集成以页首状态为准。
 
-欢迎提交可复现的问题、文档改进与小范围修复。开始前请阅读[贡献指南](CONTRIBUTING.md)；涉及身份关联或数据泄露的问题，请按[安全报告指引](SECURITY.md)私下报告，不要公开上传真实 token、访问日志或用户数据。
+欢迎提交可复现的问题、文档改进和小范围修复。请阅读[贡献指南](CONTRIBUTING.md)；涉及身份关联或数据泄露的问题按[安全报告指引](SECURITY.md)私下报告，不公开真实 Token、访问日志或用户数据。
 
 ## 文档导航
 
 | 文档 | 内容 |
 | --- | --- |
-| [部署指南](docs/DEPLOYMENT.md) | 域名、证书、权限、分流、systemd、验收和故障排查 |
-| [架构设计](docs/DESIGN.md) | 身份关联、TLS、信任边界与资源预算 |
+| [部署指南](docs/DEPLOYMENT.md) | 安装目录、升级回退、可选 HTTPS 配置和验收 |
+| [架构设计](docs/DESIGN.md) | 协议模式、身份关联、信任边界与资源预算 |
 | [UI 设计](docs/UI.md) | 信息层级、视觉规范、状态与交互 |
 | [测试记录](docs/TESTING.md) | 本地验证结果及尚未验证的内容 |
 | [更新记录](CHANGELOG.md) | 版本变更与迁移范围 |

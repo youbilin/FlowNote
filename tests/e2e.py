@@ -50,6 +50,9 @@ class Panel(http.server.BaseHTTPRequestHandler):
 
 def main():
     binary = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/flownote").resolve()
+    plain = "--http" in sys.argv[2:]
+    domain = "6.6.6.6" if plain else "traffic.example.test"
+    scheme = "HTTP" if plain else "TLS"
     panel = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Panel)
     threading.Thread(target=panel.serve_forever, daemon=True).start()
     checks = []
@@ -60,20 +63,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix="flownote-e2e-") as folder:
         root = Path(folder)
         cert, key = root / "cert.pem", root / "key.pem"
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                        "-keyout", str(key), "-out", str(cert), "-subj", "/CN=traffic.example.test",
-                        "-addext", "subjectAltName=DNS:traffic.example.test"],
-                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not plain:
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                            "-keyout", str(key), "-out", str(cert), "-subj", "/CN=traffic.example.test",
+                            "-addext", "subjectAltName=DNS:traffic.example.test"],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         log = root / "access.log"
         log.touch()
         port = free_port()
         cfg = root / "config.toml"
+        transport = 'protocol = "http"' if plain else f'[tls]\ncert_file = "{cert}"\nkey_file = "{key}"'
         cfg.write_text(f'''[server]
 listen = "127.0.0.1:{port}"
-domain = "traffic.example.test"
-[tls]
-cert_file = "{cert}"
-key_file = "{key}"
+domain = "{domain}"
+{transport}
 [xray]
 access_log = "{log}"
 lookup_timeout_ms = 300
@@ -97,14 +100,14 @@ directory = "{root / "history"}"
             else:
                 raise RuntimeError("startup timeout")
             time.sleep(.3)  # initial tail must open before fixture records are appended
-            client = ssl.create_default_context(cafile=str(cert))
+            client = None if plain else ssl.create_default_context(cafile=str(cert))
             counter = 41000
             lock = threading.Lock()
             def record(src, email, tag="traffic-query"):
                 with log.open("a") as f:
-                    f.write(f"2026/11/14 12:00:00 from {src} accepted tcp:traffic.example.test:443 [in-test >> {tag}] email: {email}\n")
+                    f.write(f"2026/11/14 12:00:00 from {src} accepted tcp:{domain}:{80 if plain else 443} [in-test >> {tag}] email: {email}\n")
             def request(email="alice", path="/json", method="GET", version=2, source=None,
-                        host="traffic.example.test", sni="traffic.example.test", log_enabled=True,
+                        host=domain, sni="traffic.example.test", log_enabled=True,
                         delay=0, tag="traffic-query", extra="", accept="text/html"):
                 nonlocal counter
                 with lock:
@@ -125,7 +128,7 @@ directory = "{root / "history"}"
                     sock.sendall(b"\r\n\r\n\x00\r\nQUIT\n" + b"\x21\x11" + struct.pack("!H", 12)
                                  + socket.inet_aton(ip) + socket.inet_aton("127.0.0.1")
                                  + struct.pack("!HH", int(sport), 8686))
-                with client.wrap_socket(sock, server_hostname=sni) as tls:
+                with (sock if plain else client.wrap_socket(sock, server_hostname=sni)) as tls:
                     tls.sendall(f"{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: {accept}\r\n{extra}Connection: close\r\n\r\n".encode())
                     raw = b""
                     while True:
@@ -137,9 +140,14 @@ directory = "{root / "history"}"
                 status = int(head.split(b" ")[1])
                 return status, head.decode(), body.decode()
             status, headers, body = request()
-            check("TLS + PROXY v2 JSON self query", status == 200 and json.loads(body)["email"] == "alice")
+            check(scheme + " + PROXY v2 JSON self query", status == 200 and json.loads(body)["email"] == "alice")
             check("no secret projection", "uuid" not in body and "subId" not in body and "DO_NOT_LEAK" not in body)
-            check("security headers", all(v in headers.lower() for v in ["no-store", "strict-transport-security", "content-security-policy", "no-referrer", "nosniff"]))
+            check("security headers", all(v in headers.lower() for v in ["no-store", "content-security-policy", "no-referrer", "nosniff"]))
+            check("HSTS matches configured protocol", ("strict-transport-security" in headers.lower()) == (not plain))
+            check("explicit default Host port", request(host=f"{domain}:{80 if plain else 443}")[0] == 200)
+            check("wrong Host port denied", request(host=f"{domain}:{443 if plain else 80}")[0] == 421)
+            forwarded = request(extra="X-Forwarded-Proto: https\r\nForwarded: proto=https\r\n")
+            check("forwarded protocol cannot change transport headers", ("strict-transport-security" in forwarded[1].lower()) == (not plain))
             check("PROXY v1 compatibility", request("bob", version=1)[0] == 200)
             alice = json.loads(request()[2])
             check("history uses actual cumulative counters", alice["history"] == [{"at_ms": alice["history"][0]["at_ms"], "up": 1000, "down": 2000}])
@@ -192,31 +200,34 @@ directory = "{root / "history"}"
                 except ConnectionResetError:
                     raw = b""
             check("non-PROXY request gets no data", not raw)
-            # Untrusted TLS certificate fails without altering system trust.
-            sock = socket.create_connection(("127.0.0.1", port), timeout=3)
-            sock.sendall(b"PROXY TCP4 203.0.113.10 127.0.0.1 55000 8686\r\n")
-            try:
-                ssl.create_default_context().wrap_socket(sock, server_hostname="traffic.example.test")
-                raise AssertionError("untrusted certificate accepted")
-            except ssl.SSLCertVerificationError:
-                check("certificate validation enforced by client", True)
-            finally:
-                sock.close()
-            for sni in ["wrong.example.test", None]:
-                context = ssl.create_default_context(cafile=str(cert))
-                context.check_hostname = False  # isolate the server-side SNI check, CA verification stays on
+            if not plain:
+                # Untrusted TLS certificate fails without altering system trust.
                 sock = socket.create_connection(("127.0.0.1", port), timeout=3)
-                sock.sendall(b"PROXY TCP4 203.0.113.10 127.0.0.1 55001 8686\r\n")
-                rejected = False
+                sock.sendall(b"PROXY TCP4 203.0.113.10 127.0.0.1 55000 8686\r\n")
                 try:
-                    with context.wrap_socket(sock, server_hostname=sni) as tls:
-                        tls.sendall(b"GET / HTTP/1.1\r\nHost: traffic.example.test\r\n\r\n")
-                        rejected = not tls.recv(4096)
-                except (ssl.SSLError, ConnectionError):
-                    rejected = True
+                    ssl.create_default_context().wrap_socket(sock, server_hostname="traffic.example.test")
+                    raise AssertionError("untrusted certificate accepted")
+                except ssl.SSLCertVerificationError:
+                    check("certificate validation enforced by client", True)
                 finally:
                     sock.close()
-                check("server rejects SNI: " + str(sni), rejected)
+                for sni in ["wrong.example.test", None]:
+                    context = ssl.create_default_context(cafile=str(cert))
+                    context.check_hostname = False  # isolate the server-side SNI check, CA verification stays on
+                    sock = socket.create_connection(("127.0.0.1", port), timeout=3)
+                    sock.sendall(b"PROXY TCP4 203.0.113.10 127.0.0.1 55001 8686\r\n")
+                    rejected = False
+                    try:
+                        with context.wrap_socket(sock, server_hostname=sni) as tls:
+                            tls.sendall(b"GET / HTTP/1.1\r\nHost: traffic.example.test\r\n\r\n")
+                            rejected = not tls.recv(4096)
+                    except (ssl.SSLError, ConnectionError):
+                        rejected = True
+                    finally:
+                        sock.close()
+                    check("server rejects SNI: " + str(sni), rejected)
+            else:
+                check("HTTP starts without certificate files", not cert.exists() and not key.exists())
             check("favicon carries no private data", request(path="/favicon.ico")[0] == 204)
             print(f"{len(checks)} integration checks passed; synthetic fixtures only")
         finally:

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/install.sh"
-ROOT = "flownote-v0.3.1-linux-amd64"
+ROOT = "flownote-v0.3.2-linux-amd64"
 ARCHIVE = ROOT + ".tar.gz"
 
 class Installer(unittest.TestCase):
@@ -30,7 +30,7 @@ args = sys.argv[1:]
 assert '--proto' in args and '--proto-redir' in args and '--tlsv1.2' in args
 assert args[args.index('--proto')+1] == '=https'
 assert args[args.index('--proto-redir')+1] == '=https'
-assert args[-1].startswith('https://github.com/youbilin/FlowNote/releases/download/v0.3.1/')
+assert args[-1].startswith('https://github.com/youbilin/FlowNote/releases/download/v0.3.2/')
 shutil.copyfile(pathlib.Path(os.environ['FIXTURE_ASSETS']) / args[-1].rsplit('/',1)[1], args[args.index('--output')+1])
 ''')
         self.package()
@@ -45,8 +45,8 @@ shutil.copyfile(pathlib.Path(os.environ['FIXTURE_ASSETS']) / args[-1].rsplit('/'
             directory = tarfile.TarInfo(ROOT + "/")
             directory.type, directory.mode = tarfile.DIRTYPE, 0o755
             tar.addfile(directory)
-            for name in ["flownote", "config.example.toml", "flownote.service", "xray-snippet.json", "LICENSE", "INSTALL.md"]:
-                version = "0.0.0" if variant == "version" else "0.3.1"
+            for name in ["flownote", "config.example.toml", "config.https.example.toml", "xray-https-snippet.json", "flownote.service", "xray-snippet.json", "LICENSE", "INSTALL.md"]:
+                version = "0.0.0" if variant == "version" else "0.3.2"
                 data = f'#!/bin/sh\nprintf "flownote {version}\\n"\n'.encode() if name == "flownote" else b"fixture\n"
                 info = tarfile.TarInfo(f"{ROOT}/{name}")
                 info.mode, info.size = (0o755 if name == "flownote" else 0o644), len(data)

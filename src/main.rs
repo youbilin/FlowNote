@@ -8,7 +8,7 @@ mod tls;
 
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
-use config::Config;
+use config::{Config, Protocol};
 use http_body_util::Full;
 use hyper::{
     body::Incoming,
@@ -39,7 +39,7 @@ struct Ctx {
     index: Arc<Index>,
     panel: PanelClient,
     history: Arc<history::History>,
-    tls: TlsAcceptor,
+    tls: Option<TlsAcceptor>,
 }
 
 #[tokio::main]
@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
     if args.len() > 1 {
         bail!("用法：flownote [配置路径] [--check-panel email] 或 flownote --preview 输出目录");
     }
-    let tls = tls::acceptor(&cfg.tls)?;
+    let tls = cfg.tls.as_ref().map(tls::acceptor).transpose()?;
     let index = Arc::new(Index::new(Duration::from_secs(cfg.xray.entry_ttl_secs)));
     tokio::spawn(logtail::run(
         cfg.xray.access_log.clone(),
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
         index.clone(),
     ));
     let listener = TcpListener::bind(cfg.server.listen).await?;
-    info!(listen = %cfg.server.listen, domain = %cfg.server.domain, "FlowNote v0.3 已启动（PROXY → TLS → HTTP）");
+    info!(listen = %cfg.server.listen, domain = %cfg.server.domain, protocol = ?cfg.server.protocol, "FlowNote 已启动");
     let sem = Arc::new(Semaphore::new(cfg.server.max_conns));
     let history = Arc::new(history::History::new(cfg.history.clone()));
     let ctx = Arc::new(Ctx {
@@ -119,15 +119,26 @@ async fn serve(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
     .await??
     .map(proxy_proto::canon)
     .context("PROXY 头缺少 TCP 来源")?;
-    let stream = timeout(Duration::from_secs(5), ctx.tls.accept(stream)).await??;
-    if !stream
-        .get_ref()
-        .1
-        .server_name()
-        .is_some_and(|s| s.eq_ignore_ascii_case(&ctx.cfg.server.domain))
-    {
-        bail!("TLS SNI 不匹配");
+    if let Some(tls) = &ctx.tls {
+        let stream = timeout(Duration::from_secs(5), tls.accept(stream)).await??;
+        if !stream
+            .get_ref()
+            .1
+            .server_name()
+            .is_some_and(|s| s.eq_ignore_ascii_case(&ctx.cfg.server.domain))
+        {
+            bail!("TLS SNI 不匹配");
+        }
+        serve_http(stream, src, ctx).await
+    } else {
+        serve_http(stream, src, ctx).await
     }
+}
+
+async fn serve_http<S>(stream: S, src: std::net::SocketAddr, ctx: Arc<Ctx>) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let email = Arc::new(
         ctx.index
             .wait_for(src, Duration::from_millis(ctx.cfg.xray.lookup_timeout_ms))
@@ -138,7 +149,14 @@ async fn serve(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
         let email = email.clone();
         async move {
             let head = req.method() == Method::HEAD;
+            let https = ctx.cfg.server.protocol == Protocol::Https;
             let mut response = handle(req, ctx, email).await;
+            if https {
+                response.headers_mut().insert(
+                    "strict-transport-security",
+                    HeaderValue::from_static("max-age=31536000"),
+                );
+            }
             if head {
                 *response.body_mut() = Full::new(Bytes::new());
             }
@@ -197,7 +215,6 @@ fn reply(status: StatusCode, ctype: &'static str, body: String) -> Response<Full
     h.insert(CONTENT_TYPE, HeaderValue::from_static(ctype));
     h.insert(CACHE_CONTROL, HeaderValue::from_static("no-store, private"));
     for (key, value) in [
-        ("strict-transport-security", "max-age=31536000"),
         ("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
         ("referrer-policy", "no-referrer"), ("x-content-type-options", "nosniff"),
         ("x-frame-options", "DENY"), ("permissions-policy", "camera=(), microphone=(), geolocation=()"),
@@ -246,14 +263,18 @@ async fn handle(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if !(host.eq_ignore_ascii_case(&ctx.cfg.server.domain)
-        || host.eq_ignore_ascii_case(&format!("{}:443", ctx.cfg.server.domain)))
+        || host.eq_ignore_ascii_case(&format!(
+            "{}:{}",
+            ctx.cfg.server.domain,
+            ctx.cfg.server.protocol.port()
+        )))
         || req.uri().authority().is_some()
     {
         return error(
             &fmt,
             StatusCode::MISDIRECTED_REQUEST,
             "入口地址不正确",
-            "请使用管理员提供的 HTTPS 查询链接。",
+            "请使用管理员提供的查询链接。",
             &ctx.cfg,
         );
     }

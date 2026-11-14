@@ -1,13 +1,14 @@
-# FlowNote Linux package
+# FlowNote v0.3.2 Linux package
 
-This archive contains a static musl binary for its named architecture, an example configuration, a systemd unit, an Xray routing fragment, and the MIT license.
+Static musl binary for Linux amd64 or arm64. Includes HTTP and HTTPS example configurations, Xray routing fragments, a systemd unit and the MIT license.
 
-Verify the archive against SHA256SUMS from the same GitHub release before extracting it. This checksum detects corruption; it is not an independent signature.
+Verify the archive against SHA256SUMS from the same release. This detects corruption; it is not an independent signature. Review install.sh, then run it with --version v0.3.2. Existing configuration and secrets are preserved. First installation waits for configuration; active services restart on upgrade.
 
-Recommended installation: download install.sh from the matching release, inspect it, then run `sudo bash install.sh --version v0.3.1`. The installer verifies the archive and its binary version, creates the service account, and preserves existing configuration, token and certificates. It does not start a new unconfigured service. Active installations are restarted on upgrade; the previous binary is retained as /usr/local/bin/flownote.previous.
+The default is http://6.6.6.6/, with no DNS or certificate. This real public IP is used only as an intercepted routing convention. Configure the panel API token and access log, grant restricted log permissions, merge xray-snippet.json into Xray, and route 6.6.6.6/32 through the correct account node in the client. Keep port 8686 on loopback. Complete two-account real deployment validation.
 
-Before first start, configure /etc/flownote/config.toml with your domain, TLS certificate/key, panel token and access-log path. Grant the flownote account read access to the log, certificate and token. Merge xray-snippet.json into the existing Xray configuration and complete the two-account deployment acceptance checks.
+For HTTPS use config.https.example.toml and xray-https-snippet.json with an owned hostname and trusted certificate. Missing server.protocol remains HTTPS for old configurations. HTTP must be explicit. Restore HTTPS configuration and both routes before reverting to v0.3.1.
 
-History is optional and records cumulative counters only when users query. New configurations retain query samples for 30 days in /var/lib/flownote/history, at most once per hour unless counters reset. Old configurations without [history] keep history disabled. No daily usage or past records are reconstructed.
+Optional history stores cumulative query samples, not exact daily bills. Default retention is 30 days with hourly sampling. Cleanup is query-triggered. Disabling history does not delete existing files.
 
-Full deployment guide: https://github.com/youbilin/FlowNote/blob/main/docs/DEPLOYMENT.md
+Full guide: https://github.com/youbilin/FlowNote/blob/main/README.md
+Deployment details: https://github.com/youbilin/FlowNote/blob/main/docs/DEPLOYMENT.md

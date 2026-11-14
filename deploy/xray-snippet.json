@@ -1,5 +1,5 @@
 {
-  "_说明": "配置片段，不是完整 Xray 配置。将日志合并、出站追加、路由插到最前；删除下划线说明字段。域名必须替换。",
+  "_说明": "合并片段，不是完整 Xray 配置。日志合并，出站追加，路由插到最前；删除下划线说明字段。6.6.6.6 只是约定入口，必须在 Xray 截获。",
   "log": {
     "access": "/usr/local/x-ui/access.log",
     "loglevel": "warning"
@@ -17,21 +17,20 @@
   "routing_rules_insert_first": [
     {
       "type": "field",
-      "network": "udp",
-      "domain": [
-        "full:traffic.example.com"
+      "network": "tcp",
+      "ip": [
+        "6.6.6.6/32"
       ],
-      "port": "443",
-      "outboundTag": "block"
+      "port": "80",
+      "outboundTag": "traffic-query"
     },
     {
       "type": "field",
-      "network": "tcp",
-      "domain": [
-        "full:traffic.example.com"
+      "network": "tcp,udp",
+      "ip": [
+        "6.6.6.6/32"
       ],
-      "port": "443",
-      "outboundTag": "traffic-query"
+      "outboundTag": "block"
     }
   ],
   "_block出站": "如果没有 block 标签，追加 {\"tag\":\"block\",\"protocol\":\"blackhole\",\"settings\":{}}。不要改动默认出站。",

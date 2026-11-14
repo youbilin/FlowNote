@@ -1,140 +1,121 @@
 <div align="center">
-
-<img src="docs/assets/banner.svg" alt="FlowNote — A quiet place to check your traffic" width="100%" />
+<img src="docs/assets/banner.svg" alt="FlowNote traffic dashboard" width="100%" />
 
 # FlowNote
 
 **Connect your node. Open a link. Know your traffic balance.**
 
-A lightweight HTTPS traffic dashboard for people sharing a 3x-ui server through individual accounts.
-No panel subscription service or end-user login required.
+A minimal traffic dashboard for users sharing a 3x-ui server through individual accounts. No panel subscription or end-user login required.
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.1-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.2-246852)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [简体中文](README.md) · **English**
-
 </div>
-
-> [!IMPORTANT]
-> **Early software: validate with two real accounts before deployment.** Identity is inferred by correlating Xray source addresses with access logs. Mux, CDN frontends, and shared underlying connections are unsupported. Local simulated integration tests have passed; real 3x-ui / Xray deployment has not yet been verified. HTTPS does not fix an incorrect identity association.
 
 ## At a glance
 
-<img src="docs/assets/desktop.png" alt="FlowNote desktop dashboard with remaining traffic, account status, quota, and expiry" width="100%" />
+<img src="docs/assets/desktop.png" alt="Remaining traffic, uploads, downloads, quota and expiry" width="100%" />
 
-*All screenshots use synthetic data. The dashboard UI is currently in Chinese; this English README is a documentation translation, not a claim of UI localization.*
+Screenshots use synthetic data. The UI is in Chinese; this README does not imply UI localization.
 
-- **The numbers that matter:** remaining and used traffic, quota, uploads, downloads, expiry, and last online time.
-- **No subscription dependency:** users connect their own node and open a dedicated URL. Administrators configure a panel API token.
-- **Native HTTPS:** PROXY protocol is read before TLS; SNI and Host must match the configured domain.
-- **Quiet frontend:** responsive layouts, system dark mode, no JavaScript, external fonts, analytics, cookies, or browser storage.
-- **Composable outputs:** HTML, text, and JSON; GET and HEAD.
-- **Bounded backend:** timeouts, concurrency limits, short-lived cache, response size limits, and rejection of observed identity conflicts.
+- Remaining / used traffic, uploads / downloads, total quota, expiry, account status and last online time.
+- Optional cumulative curves sampled when users query; no historical backfill or exact daily billing.
+- Responsive light / dark UI without JavaScript, external fonts, analytics or browser storage.
+- HTML, text and JSON; GET / HEAD. Query parameters cannot select another account.
+- Default **http://6.6.6.6/** without DNS or certificates. Existing native HTTPS deployments remain supported.
 
-## Requirements
+## Set up http://6.6.6.6/
 
-1. A Linux VPS with FlowNote and Xray on the same host and network namespace.
-2. A 3x-ui version supporting API tokens and `GET /panel/api/clients/traffic/{email}`. Panel subscriptions may remain disabled.
-3. Your own dedicated domain and a valid certificate. DNS-01 renewal is recommended; do not put the query endpoint behind a CDN.
-4. Proxy routing that preserves the query domain, enabled access logs, and a unique client email label. Disable Mux for this topology.
+6.6.6.6 is a real public address used only as an intercepted routing convention. FlowNote does not own or contact it. Do not assign it to an interface or expose port 8686.
 
-## Get started
-
-On a Linux amd64 / arm64 host with systemd, install the prebuilt static musl package without a Rust toolchain:
+1. Run Linux amd64 / arm64 with systemd. FlowNote and Xray must share a host **and network namespace**. The panel must support API tokens and `/panel/api/clients/traffic/{email}`. Each account needs a unique email label. Disable Mux and shared underlying connections.
+2. Install the fixed release:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.1/install.sh | sudo bash -s -- --version v0.3.1
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.2/install.sh | sudo bash -s -- --version v0.3.2
 ```
 
-The installer selects the native architecture, verifies the release checksum, archive layout and binary version, and installs the service account and systemd unit. Existing configuration, tokens and certificates are preserved. A new service waits for configuration before its first start; an active service is restarted on upgrade, with a previous binary retained for rollback.
+The installer validates SHA-256, archive paths and binary version. First installs wait for configuration before starting. Existing configurations and secrets are preserved; active services restart on upgrade. You can download and inspect the script first, or use `--download-only ./flownote-download` without installing.
 
-To inspect the script first or download an offline package:
+3. Save the raw panel token in `/etc/flownote/token` (root:flownote, mode 0640). Edit `/etc/flownote/config.toml` using [the default template](deploy/config.example.toml):
+
+```toml
+[server]
+listen = "127.0.0.1:8686"
+protocol = "http"
+domain = "6.6.6.6"
+
+[xray]
+access_log = "/usr/local/x-ui/access.log"
+outbound_tag = "traffic-query"
+
+[panel]
+base_url = "http://127.0.0.1:2053"
+token_file = "/etc/flownote/token"
+```
+
+Include your panel webBasePath in base_url if configured, without appending /panel/api. Remote panel HTTP is rejected; use verified HTTPS. Do not add `[tls]` in HTTP mode. The full template also enables optional query history.
+
+4. Enable Xray access logging at the same path. Grant flownote read permission on that file and traversal of its parent directories; preserve access after rotation. Do not recursively expose the panel directory or database.
+5. Merge [xray-snippet.json](deploy/xray-snippet.json) into the persistent Xray configuration. Append the traffic-query freedom outbound with redirect `127.0.0.1:8686` and proxyProtocol `2`. Keep the existing default outbound first. Insert the exact `6.6.6.6/32`, TCP, port 80 routing rule before other rules; the following block rule prevents other traffic to that IP leaving the server. Explanatory keys are merge instructions, not Xray fields. Newer freedom versions may need a supported finalRules exception allowing only TCP loopback port 8686 for this outbound.
+6. In Clash / Mihomo, insert this rule first, replacing the policy name:
+
+```yaml
+rules:
+  - IP-CIDR,6.6.6.6/32,YOUR-NODE-OR-POLICY,no-resolve
+  # existing rules follow
+```
+
+Select your own account node, not DIRECT or a group mixing accounts. Enable browser capture through system proxy, TUN or browser settings. Other clients need an equivalent IP rule. No DNS or hosts change is needed.
+
+7. Validate the panel and start FlowNote:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.1/install.sh
-less install.sh
-sudo bash install.sh --version v0.3.1
-# Download and verify without installing:
-bash install.sh --download-only ./flownote-download
+sudo -u flownote /usr/local/bin/flownote /etc/flownote/config.toml --check-panel 'REAL-CLIENT-EMAIL'
+sudo systemctl enable --now flownote
+sudo journalctl -u flownote -n 50 --no-pager
 ```
 
-[Release packages and SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.1). Checksums detect corruption and are not independent signatures. Source builds remain available with `cargo build --release --locked`.
-
-
-Follow the [deployment guide](docs/DEPLOYMENT.md) to create a dedicated service user, install certificates and token files, and configure [`config.example.toml`](deploy/config.example.toml), the [Xray routing snippet](deploy/xray-snippet.json), and the [systemd unit](deploy/flownote.service). The detailed deployment guide is currently in Chinese.
-
-The panel-only check prints one account's traffic and exits without starting a listener:
+8. Connect your node and open **http://6.6.6.6/**. Allow HTTP for this address if your browser upgrades it. HTTPS on this IP is intentionally unsupported. From your computer, replace the example SOCKS port with the real one:
 
 ```bash
-sudo -u flownote /usr/local/bin/flownote /etc/flownote/config.toml   --check-panel 'your-client-email'
+curl --proxy socks5h://127.0.0.1:7891 'http://6.6.6.6/?format=text'
+curl --proxy socks5h://127.0.0.1:7891 'http://6.6.6.6/json'
 ```
 
-After deployment and two-account validation, users connect their node and open `https://traffic.your-domain/`.
+9. Validate with two distinct real accounts, including simultaneous queries behind the same NAT, reconnection and log rotation, before sharing the link. Direct curl to 8686 is rejected because PROXY metadata is required.
 
-Terminal queries must use the corresponding proxy too. Replace the example domain and local port:
+[Complete instructions, log ACL examples, routing JSON and troubleshooting (Chinese)](README.md#快速开始).
 
-```bash
-curl --proxy socks5h://127.0.0.1:1080 https://traffic.example.com/
-curl --proxy socks5h://127.0.0.1:1080 https://traffic.example.com/json
-```
+## Security and compatibility
 
-### Preview without a panel
+HTTP has no independent origin authentication or integrity. An authenticated encrypted node tunnel protects traffic inside it; incorrect direct routing, an unencrypted LAN proxy hop and a compromised node remain risks. Keep loopback and account checks in place. This is not independent browser-to-FlowNote HTTPS.
 
-```bash
-cargo run --locked -- --preview output/preview
-```
+Identity depends on Xray source / access-log correlation. Observed conflicts fail closed, but delayed logs can leave conflicts unobserved. Mux, CDN frontends and shared underlying connections are unsupported. Simulated tests do not replace real Xray validation. Expired / disabled accounts may be unable to reach the page if Xray rejects their connections.
 
-Open `output/preview/index.html` locally. Nine synthetic state pages are generated, including low balance, exhausted, expired, disabled, unlimited, pending activation, 403, and 502. No configuration, token, certificate, network service, or panel connection is needed.
+Existing HTTPS configurations keep working: missing protocol defaults to HTTPS. Use [config.https.example.toml](deploy/config.https.example.toml) and [xray-https-snippet.json](deploy/xray-https-snippet.json) with an owned hostname and trusted certificate. DNS-01 does not require A / AAAA to point to the server. To switch to HTTP, update configuration and both routes, remove `[tls]`, restart and validate. Restore HTTPS settings and routes before reverting to v0.3.1.
 
-## Connection model
+Multi-VPS aggregation, groups and alerts are outside scope. v0.2 was skipped; v0.4 is not planned.
 
-```text
-Browser → HTTPS through its node → Xray → dedicated freedom outbound
-                                              ↓ PROXY header + TLS
-                                     FlowNote on 127.0.0.1:8686
-                                      ↙                    ↘
-                       source-to-email log index      3x-ui traffic API
-```
-
-Identity comes from server-side log correlation. Request parameters, cookies, and forwarded headers cannot select another account. A mismatched upstream email or an observed source conflict is rejected.
-
-**Keep port 8686 on loopback.** Do not publish it, DNAT it, or place it behind a conventional HTTP reverse proxy. PROXY headers are unauthenticated; untrusted local processes are outside this deployment's trust boundary.
-
-## Compatibility and limits
-
-| Scenario | Status |
-| --- | --- |
-| Single VPS, colocated Xray, non-multiplexed connections | Intended topology; real deployment acceptance tests still required |
-| IPv4 / IPv6 and PROXY v1 / v2 | Parser and unit test coverage |
-| Panel subscription disabled | Supported |
-| API-token-capable panel | Required; actual endpoint permissions depend on the installed panel |
-| Mux / CDN / shared underlying connections | Unsupported |
-| Remote panel | Validated HTTPS only; loopback HTTP is allowed |
-| Account blocked by Xray after expiry or exhaustion | Dashboard access cannot be guaranteed |
-| Multi-VPS aggregation, groups, notifications | Out of scope |
-
-This release moves directly from the v0.1 prototype to v0.3, skips v0.2, and does not plan v0.4.
-
-## Development
+## Build and validate
 
 ```bash
 cargo fmt --check
-cargo clippy --locked -- -D warnings
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo build --locked
 python3 tests/e2e.py target/debug/flownote
+python3 tests/e2e.py target/debug/flownote --http
+python3 tests/installer.py
+cargo run --locked -- --preview output/preview
 ```
 
-Local validation: **33 unit tests, 35 TLS / PROXY integration checks, and 8 offline installer test groups passed**. Integration tests use a temporary local certificate and simulated panel/logs; they do not constitute real Xray verification. See [test notes](docs/TESTING.md), [architecture](docs/DESIGN.md), and [UI design](docs/UI.md).
+The preview contains synthetic static pages and needs no configuration or panel.
 
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and report potential data exposure privately using [SECURITY.md](SECURITY.md). Never post real API tokens, access logs, or user traffic records.
+[Deployment](docs/DEPLOYMENT.md) · [Design](docs/DESIGN.md) · [UI](docs/UI.md) · [Test records](docs/TESTING.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md)
 
 ## License
 
-[MIT](LICENSE) © 2026 You Bilin. An independent project, not affiliated with 3x-ui or Xray.
-
-## Query history
-
-The compact dashboard shows remaining traffic, used traffic, uploads, downloads, quota, expiry and status. Optional server-side history stores actual cumulative counters observed during user queries and renders an inline SVG curve. It does not reconstruct past usage or provide precise daily billing. New installation templates enable 30-day retention with hourly sampling; legacy configurations keep history disabled. Cache hits reuse the original fetch timestamp, and counter resets break the curve. Account files use SHA-256 names with restricted filesystem permissions; they are not encrypted. See [history and deletion](docs/DEPLOYMENT.md#历史曲线与数据保留).
+[MIT](LICENSE) © 2026 You Bilin. Independent project, not affiliated with 3x-ui or Xray.

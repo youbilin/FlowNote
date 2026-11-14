@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   check:
-    name: Rust and TLS integration
+    name: Rust and HTTP / TLS integration
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -35,8 +35,10 @@ jobs:
         run: cargo test --locked
       - name: Build
         run: cargo build --locked
-      - name: TLS and PROXY integration
-        run: python3 tests/e2e.py target/debug/flownote
+      - name: HTTP, TLS and PROXY integration
+        run: |
+          python3 tests/e2e.py target/debug/flownote
+          python3 tests/e2e.py target/debug/flownote --http
       - name: Generate synthetic previews
         run: cargo run --locked -- --preview output/preview
       - name: Installer checks

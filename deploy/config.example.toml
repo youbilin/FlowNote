@@ -1,12 +1,10 @@
 # FlowNote v0.3 — 不需要开启面板订阅。
 [server]
 listen = "127.0.0.1:8686" # 强制回环；不要开放公网或转发此端口
-domain = "traffic.example.com" # 替换为你拥有的域名，不含 https:// 和端口
+protocol = "http" # 旧配置未设置时默认为 https
+domain = "6.6.6.6" # 精确校验 HTTP Host；客户端必须把该 IP 送入你的节点
 max_conns = 128
 
-[tls]
-cert_file = "/etc/flownote/tls/fullchain.pem"
-key_file = "/etc/flownote/tls/privkey.pem"
 
 [xray]
 access_log = "/usr/local/x-ui/access.log"

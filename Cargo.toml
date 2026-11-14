@@ -1,8 +1,8 @@
 [package]
 name = "flownote"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
-description = "Private HTTPS traffic self-service for 3x-ui users"
+description = "Traffic self-service for 3x-ui users"
 license = "MIT"
 repository = "https://github.com/youbilin/FlowNote"
 readme = "README.md"
