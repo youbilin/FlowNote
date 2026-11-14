@@ -28,3 +28,5 @@ PROXY v1/v2、TLS 证书验证、错误/缺失 SNI、Host 与 absolute-form 校�
 Release 工作流在原生 Linux amd64 / arm64 runner 构建静态 musl 包，分别运行测试与预览，检查 `--version` 后打包。最终发布任务只有在两个架构均成功后才生成 SHA256SUMS 并公开 Release。结果以 GitHub Actions 实际记录为准。
 
 本地测试不会以 root 身份安装到真实系统。安装脚本测试通过临时模拟下载验证安装前检查；首次安装与升级时的 systemd 行为仍需管理员按部署指南在目标服务器验收。
+
+2026-11-14 发布实测：[v0.3.1 Release 工作流](https://github.com/youbilin/FlowNote/actions/runs/43570680870) 的 amd64、arm64 和发布任务全部通过。公开发布后重新下载两个归档与 install.sh，SHA256SUMS 三项均通过；readelf 确认 X86-64 / AArch64 且均无动态解释器。下载后的 amd64 二进制 `--version` 为 0.3.1，再次通过 35 项 TLS/PROXY 集成检查。发布版安装脚本从 GitHub 实际下载、校验并保存 amd64 离线包成功；未在用户真实服务器执行 root 安装。
