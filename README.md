@@ -9,7 +9,7 @@
 面向 3x-ui 拼节点用户的轻量流量查询页。无需开启面板订阅，无需用户登录。
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.2-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.3-246852)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust&logoColor=white)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -56,7 +56,7 @@ FlowNote 提供一张只读的流量手记：用户先连接管理员分配的�
 | --- | --- |
 | 看清余量 | 剩余、已用、总配额、上传、下载，以及直观的用量进度 |
 | 日期曲线 | 可选保存查询时的累计上传 / 下载，按实际时间绘制；不回填历史、不冒充每日账单 |
-| 便捷安装 | Linux amd64 / arm64 静态安装包、校验清单和安装脚本；首次启动前配置域名与面板 |
+| 便捷安装 | Linux amd64 / arm64 静态安装包、校验清单和安装脚本；附交互式配置菜单，自动检测本机 3x-ui |
 | 看清有效期 | 到期时间、时区、最近在线；正确区分无限套餐与首次使用计时 |
 | 状态有反馈 | 正常、低流量、用尽、过期、停用及友好错误页 |
 | HTTP / HTTPS 入口 | 默认 `http://6.6.6.6/`，也兼容自有域名 HTTPS |
@@ -89,29 +89,77 @@ FlowNote 提供一张只读的流量手记：用户先连接管理员分配的�
 - 面板支持 API Token 和 `GET /panel/api/clients/traffic/{email}`。API 与订阅功能独立；没有此接口时，需要先确认面板兼容性。
 - 每个用户有唯一的 client email 标签；查询连接禁用 Mux、多账号共享底层连接，以及会合并来源的 CDN / 反向代理。客户端选择实际要查的账号节点。
 
-### 2. 一键安装
+### 2. 一键安装并打开交互式菜单（推荐）
 
 支持 **Linux amd64 / arm64**，自动识别架构，使用预编译静态二进制，不需要在 VPS 上编译 Rust：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.2/install.sh | sudo bash -s -- --version v0.3.2
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.3/install.sh | sudo bash -s -- --version v0.3.3 --setup
 ```
 
-安装脚本下载固定版本、校验 SHA-256、包内路径和二进制版本，然后安装程序与 systemd 服务。**首次安装不会自动启动未配置的服务，也不会修改你的 Xray 配置。** 已有的配置、Token、证书和历史数据会保留；活动服务升级时会短暂重启。
+安装脚本下载固定版本、校验 SHA-256、包内路径和二进制版本，安装程序与 systemd 服务后打开配置菜单。**需要 Python 3（仅使用标准库）；缺少时先执行 `sudo apt-get install -y python3`。** 单独安装不改 Xray；选择菜单配置并确认后，才会合并查询路由并启动服务。安装或升级保留已有配置和数据；活动服务升级会短暂重启，向导应用配置时另有备份与确认。
 
 想先审阅脚本，或只下载离线包：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.2/install.sh
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.3/install.sh
 less install.sh
-sudo bash install.sh --version v0.3.2
+sudo bash install.sh --version v0.3.3 --setup
 # 只下载并校验，不安装：
-bash install.sh --version v0.3.2 --download-only ./flownote-download
+bash install.sh --version v0.3.3 --download-only ./flownote-download
 ```
 
-[预编译包及 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.2)。清单用于发现下载损坏，不是独立签名。
+[预编译包及 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.3)。清单用于发现下载损坏，不是独立签名。
 
-### 3. 填写面板 Token 和服务配置
+### 交互式配置：已经安装 3x-ui，直接用菜单
+
+已有 FlowNote 也可以运行上面的安装命令升级，然后随时打开：
+
+```bash
+sudo flownote-setup
+```
+
+```text
+流量笺 · FlowNote
+  1. 检测 3x-ui 安装
+  2. 配置 HTTP 查询入口
+  3. 查看服务状态与日志
+  4. 显示客户端分流规则
+  0. 退出
+```
+
+**按官方脚本安装 3x-ui 的服务器，通常选择 `2` 即可。** 向导从本机设置读取实际端口和访问路径，不会把面板端口写死成 2053。
+
+| 检测项 | 默认位置 / 处理 |
+| --- | --- |
+| 面板目录 | `/usr/local/x-ui` |
+| 面板数据库 | `/etc/x-ui/x-ui.db`，只读取必要设置 |
+| Xray 内核 | 自动识别 `/usr/local/x-ui/bin/` 中的架构对应可执行文件 |
+| 面板地址 | 从 SQLite 读取实际端口、访问路径；面板启用 HTTPS 时要求输入证书可验证的实际地址 |
+| 访问日志 | 优先使用已有绝对路径；未配置时建议 `/var/log/flownote-xray/access.log` |
+
+按提示确认面板地址和日志位置，然后粘贴 **API Token（输入不回显）**，填写一个**真实 client email** 用于核对流量接口权限。Token 是面板 API 凭据，不是登录密码、UUID 或订阅链接；已有 Token 可留空保留。无需开启订阅。
+
+若提示“未找到持久化 Xray 模板”，先在面板的 **Xray 设置 / 配置** 页保存一次现有配置，再重新运行。向导不会拿面板生成的运行时 `config.json` 覆盖持久化模板。
+
+确认前会检查 Xray 候选配置并显示变更。输入 `y` 后先验证面板接口，再备份并修改数据库中的 Xray 模板这一项，合并专用出站与路由，设置日志权限，启动 FlowNote。原节点、默认出站、面板登录与订阅开关保留；**应用期间 x-ui 会短暂重启，连接可能中断。** 向导生成 HTTP / 历史采样配置，已有 FlowNote 自定义配置会先备份。原日志的地址掩码会关闭，以保留关联账号所需的完整来源 IP:端口。
+
+备份在 `/var/backups/flownote/<时间-随机后缀>/`，仅 root 可读，包含原数据库及已有的 FlowNote 配置 / Token。失败时尝试只恢复 Xray 模板与 FlowNote 配置，不用整库回滚流量统计；已创建的日志文件、ACL 或轮转配置可能保留。备份含敏感信息，请勿上传公开仓库。
+
+默认专用日志会生成 `/etc/logrotate.d/flownote-xray`；系统需安装 `logrotate` 才会执行轮转（Debian / Ubuntu：`sudo apt-get install -y logrotate`）。选择已有日志时须自行让轮转后的文件继续可读；需要补 ACL 的环境先安装 `acl`。日志不能放在受服务 `ProtectHome` 限制的 `/root` 或 `/home` 下。
+
+**向导成功后，跳到第 6 步配置自己的客户端，再完成第 8 步查询和第 9 步双账号验收。第 3、4、5、7 步是手动配置的备用方式，不必重复执行。**
+
+只读检测，或指定自定义安装位置：
+
+```bash
+sudo flownote-setup --detect
+sudo flownote-setup --xui-dir /实际面板目录 --db /实际目录/x-ui.db --core /实际目录/xray
+```
+
+自动配置支持本机 systemd `x-ui` 服务与 SQLite；会核对运行中的面板路径、数据库目录和网络命名空间。Docker、PostgreSQL、远程面板或其他非标准部署请按下面的手动方式配置；已有 HTTPS 查询配置请先人工检查，向导不会覆盖冲突的同名出站。
+
+### 3. 手动配置备用：填写面板 Token 和服务配置
 
 在面板中创建有流量查询权限的 API Token。下面通过编辑器保存，避免把真实 Token 放入命令历史：
 

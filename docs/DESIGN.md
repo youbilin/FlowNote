@@ -1,4 +1,4 @@
-# 流量笺 · FlowNote v0.3.2 设计
+# 流量笺 · FlowNote v0.3.3 设计
 
 ## 1. 范围与名称
 
@@ -70,7 +70,7 @@ JSON 是最小只读投影：email 标签、enable/status、up/down/used/total/r
 
 ## 7. 迁移与交付
 
-旧 v0.1 压缩包不覆盖；保留用于回溯。0.3.2 发布包包含对应架构的静态 musl 二进制、部署示例、安装说明与许可证，不含 Token、私钥、真实日志或历史记录。源码仓库另含 Cargo.lock。仓库 README 提供项目概览及完整 HTTP 部署步骤，DEPLOYMENT.md 补充升级、回退和 HTTPS 配置；发布记录见 CHANGELOG。
+旧 v0.1 压缩包不覆盖；保留用于回溯。0.3.3 发布包包含对应架构的静态 musl 二进制、部署示例、安装说明与许可证，不含 Token、私钥、真实日志或历史记录。源码仓库另含 Cargo.lock。仓库 README 提供项目概览及完整 HTTP 部署步骤，DEPLOYMENT.md 补充升级、回退和 HTTPS 配置；发布记录见 CHANGELOG。
 
 ## 8. 查询采样与发布
 
@@ -79,3 +79,13 @@ JSON 是最小只读投影：email 标签、enable/status、up/down/used/total/r
 历史文件只含 timestamp / up / down，不含 Token 或原始账号字段；账号标签的 SHA-256 仅用于命名，不视为加密或不可关联性。持久化采用独占临时文件、0600、fsync 后原子 rename；读取校验文件类型、大小、序列顺序与非负计数。默认路径受 systemd StateDirectory 管理。过期清理按查询触发，没有后台定时任务，保留时间与删除办法见部署指南。
 
 GitHub Actions 使用原生 amd64 / arm64 Linux runner 分别编译 musl 包，完成单元、HTTP/PROXY、TLS/PROXY、安装脚本与二进制版本检查后，汇总两个包及 SHA256SUMS，全部齐备才发布。Actions 使用固定提交引用；发布权限只授予最终发布任务。脚本固定版本并验证 HTTPS 下载、清单唯一条目、包内路径、文件类型和版本；SHA-256 清单不代替独立签名。首次安装等待管理员配置，升级保留配置和旧二进制。
+
+## 交互式部署向导（v0.3.3）
+
+`flownote-setup` 是 Python 3 标准库程序，shell 入口支持本机 TTY 和安装脚本 `--setup`。只读检测通过 SQLite 白名单读取安装设置，不读取、猜测或轮换面板 Token；交互输入 Token 不回显，通过受限文件交给 FlowNote `--check-panel`。自动应用只支持本机 systemd/SQLite，核对 MainPID 的程序、工作目录、数据库环境变量和网络命名空间。面板 TLS 配置不会被探测逻辑降级。
+
+持久化模板与运行时配置分开处理：前者只合并日志和专用出站 / 精确路由，后者仅用于内核候选配置检查。模板缺失、同名出站冲突、非预期查询路由或自定义 finalRules 时停止自动修改。保留默认出站、节点与其他面板设置；日志必须保留完整来源 IP:端口。生成的 FlowNote HTTP 配置会替换原自定义项，交互确认明确告知并先备份。
+
+用户确认后，先保存配置并验证面板权限，再设置日志权限、停止 x-ui，持有 SQLite 写事务核对模板没有并发修改，通过独立只读连接备份数据库，仅更新该设置。重启后观察 x-ui / Xray / FlowNote 状态；失败或 Ctrl-C 尝试恢复单个模板与 FlowNote 文件，拒绝覆盖其他并发模板编辑，不用整库替换流量记录。日志、ACL、轮转修改不承诺全部回退。备份及含节点凭据的候选配置位于 root-only `/var/backups/flownote/`，不位于 FlowNote 用户可写的数据目录。
+
+专用日志按 x-ui 服务用户与 flownote 组分配权限，默认生成 copytruncate 轮转片段；系统须另有 logrotate。已有日志只追加必要文件读取与目录穿越 ACL，不递归开放数据库目录。自动配置不能代替客户端分流和真实双账号身份验收。

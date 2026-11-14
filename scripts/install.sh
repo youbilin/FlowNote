@@ -3,16 +3,17 @@
 set -Eeuo pipefail
 
 main() {
-    local version='v0.3.2' download_only='' arch='' release root_dir archive tmp expected actual dest was_active=false
+    local version='v0.3.3' interactive=false download_only='' arch='' release root_dir archive tmp expected actual dest was_active=false
     while (($#)); do
         case "$1" in
             --version) [[ $# -ge 2 ]] || die 'Missing --version value'; version="$2"; shift 2 ;;
             --download-only) [[ $# -ge 2 ]] || die 'Missing output directory'; download_only="$2"; shift 2 ;;
-            -h|--help) printf '%s\n' 'Usage: bash install.sh [--version v0.3.2] [--download-only DIR]' 'Installs binary, example config and systemd unit; configure panel token, log access and Xray/client routing before first start.'; return ;;
+            --setup) interactive=true; shift ;;
+            -h|--help) printf '%s\n' 'Usage: bash install.sh [--version v0.3.3] [--download-only DIR] [--setup]' 'Installs binary, example config and systemd unit; configure panel token, log access and Xray/client routing before first start.'; return ;;
             *) die "Unknown option: $1" ;;
         esac
     done
-    [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Version must look like v0.3.2'
+    [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Version must look like v0.3.3'
     [[ "$(uname -s)" == Linux ]] || die 'Only Linux is supported'
     case "$(uname -m)" in
         x86_64|amd64) arch=amd64 ;;
@@ -21,6 +22,11 @@ main() {
     esac
     local tool
     for tool in curl tar sha256sum awk sort cmp mktemp install; do command -v "$tool" >/dev/null || die "Required command missing: $tool"; done
+    if "$interactive"; then
+        [[ -z "$download_only" ]] || die "--setup cannot be combined with --download-only"
+        command -v python3 >/dev/null || die "Install Python 3 first: sudo apt-get install -y python3"
+        [[ -t 0 || -t 1 ]] || die "--setup requires an interactive terminal"
+    fi
     if [[ -z "$download_only" ]]; then
         [[ "$EUID" -eq 0 ]] || die 'Use sudo bash install.sh, or --download-only DIR without root'
         for tool in systemctl useradd getent; do command -v "$tool" >/dev/null || die "Required command missing: $tool"; done
@@ -40,7 +46,7 @@ main() {
     actual="$(sha256sum "$tmp/$archive")"
     [[ "${actual%% *}" == "$expected" ]] || die 'SHA-256 mismatch; installation stopped'
     # Reject unexpected paths, duplicate entries, links and special files before extraction.
-    printf '%s\n' "$root_dir/" "$root_dir/flownote" "$root_dir/config.example.toml" "$root_dir/config.https.example.toml" "$root_dir/xray-https-snippet.json" "$root_dir/flownote.service" "$root_dir/xray-snippet.json" "$root_dir/LICENSE" "$root_dir/INSTALL.md" | LC_ALL=C sort > "$tmp/expected"
+    printf '%s\n' "$root_dir/" "$root_dir/flownote" "$root_dir/config.example.toml" "$root_dir/config.https.example.toml" "$root_dir/xray-https-snippet.json" "$root_dir/flownote.service" "$root_dir/xray-snippet.json" "$root_dir/LICENSE" "$root_dir/INSTALL.md" "$root_dir/setup.sh" "$root_dir/setup.py" | LC_ALL=C sort > "$tmp/expected"
     tar -tzf "$tmp/$archive" | LC_ALL=C sort > "$tmp/actual"
     cmp -s "$tmp/expected" "$tmp/actual" || die 'Unexpected archive layout'
     tar -tvzf "$tmp/$archive" | awk 'substr($0,1,1) != "-" && substr($0,1,1) != "d" {bad=1} END {exit bad}' || die 'Links or special files in archive'
@@ -73,6 +79,8 @@ main() {
     install -m 0644 "$tmp/$root_dir/flownote.service" /etc/systemd/system/flownote.service
     install -d -m 0755 /usr/local/share/flownote
     install -m 0644 "$tmp/$root_dir/xray-snippet.json" "$tmp/$root_dir/xray-https-snippet.json" "$tmp/$root_dir/config.https.example.toml" "$tmp/$root_dir/INSTALL.md" "$tmp/$root_dir/LICENSE" /usr/local/share/flownote/
+    install -m 0644 "$tmp/$root_dir/setup.py" /usr/local/share/flownote/setup.py
+    install -m 0755 "$tmp/$root_dir/setup.sh" /usr/local/bin/flownote-setup
     systemctl daemon-reload
     if "$was_active"; then
         local restarted=true
@@ -89,8 +97,10 @@ main() {
         fi
     fi
     printf '\nFlowNote %s installed.\n' "$version"
-    if ! "$was_active"; then
-        printf '%s\n' 'Next: edit /etc/flownote/config.toml; save panel token; grant log access and merge /usr/local/share/flownote/xray-snippet.json.' 'Guide: https://github.com/youbilin/FlowNote/blob/main/docs/DEPLOYMENT.md' 'Then: systemctl enable --now flownote.service'
+    if "$interactive"; then
+        /usr/local/bin/flownote-setup
+    elif ! "$was_active"; then
+        printf '%s\n' 'Next: edit /etc/flownote/config.toml; save panel token; grant log access and merge /usr/local/share/flownote/xray-snippet.json.' 'Guide: https://github.com/youbilin/FlowNote/blob/main/docs/DEPLOYMENT.md' 'Interactive setup: sudo flownote-setup (requires Python 3)' 'Manual start: systemctl enable --now flownote.service'
     fi
 }
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }

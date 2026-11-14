@@ -8,7 +8,7 @@
 A minimal traffic dashboard for users sharing a 3x-ui server through individual accounts. No panel subscription or end-user login required.
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.2-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.3-246852)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [简体中文](README.md) · **English**
@@ -34,12 +34,26 @@ Screenshots use synthetic data. The UI is in Chinese; this README does not imply
 2. Install the fixed release:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.2/install.sh | sudo bash -s -- --version v0.3.2
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.3/install.sh | sudo bash -s -- --version v0.3.3 --setup
 ```
 
 The installer validates SHA-256, archive paths and binary version. First installs wait for configuration before starting. Existing configurations and secrets are preserved; active services restart on upgrade. You can download and inspect the script first, or use `--download-only ./flownote-download` without installing.
 
-3. Save the raw panel token in `/etc/flownote/token` (root:flownote, mode 0640). Edit `/etc/flownote/config.toml` using [the default template](deploy/config.example.toml):
+**Interactive setup is recommended for a standard local 3x-ui installation.** Install Python 3 if missing (`sudo apt-get install -y python3`). The command above opens the menu; reopen it anytime with:
+
+```bash
+sudo flownote-setup
+# Read-only discovery:
+sudo flownote-setup --detect
+```
+
+Choose `2` to configure the HTTP entry. The wizard discovers `/usr/local/x-ui`, `/etc/x-ui/x-ui.db`, the executable under `bin/`, and the actual panel port/base path. HTTPS panels require an explicit URL with a valid certificate. Enter your API token without echo and a real client email to check API permissions. If the persisted Xray template is missing, save the existing configuration once in the panel's Xray settings and rerun.
+
+After explicit confirmation, it validates the panel, backs up to root-only `/var/backups/flownote/`, merges the query outbound/rules into the persisted template, grants log access, and starts FlowNote. Restarting x-ui can briefly interrupt connections. Existing custom FlowNote settings are backed up and replaced with the generated HTTP/history config; Xray source-address masking is disabled for account correlation. On failure it attempts to restore only the template and FlowNote settings; it does not restore the whole traffic database. Log files, ACLs or rotation changes may remain. The default dedicated log needs system `logrotate`; existing logs must retain read permissions across rotation.
+
+**After successful setup, skip manual steps 3–5 and 7. Continue with client routing in step 6, then query and perform the real two-account checks in steps 8–9.** The wizard supports local systemd/SQLite installations; Docker, PostgreSQL and remote panels need manual configuration. Custom locations: `sudo flownote-setup --xui-dir /path/to/panel --db /path/to/x-ui.db --core /path/to/xray`.
+
+3. Manual alternative: save the raw panel token in `/etc/flownote/token` (root:flownote, mode 0640). Edit `/etc/flownote/config.toml` using [the default template](deploy/config.example.toml):
 
 ```toml
 [server]

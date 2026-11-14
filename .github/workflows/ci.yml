@@ -43,6 +43,7 @@ jobs:
         run: cargo run --locked -- --preview output/preview
       - name: Installer checks
         run: |
-          bash -n scripts/install.sh scripts/package.sh
-          shellcheck scripts/install.sh scripts/package.sh
+          bash -n scripts/install.sh scripts/package.sh scripts/setup.sh
+          shellcheck scripts/install.sh scripts/package.sh scripts/setup.sh
           python3 tests/installer.py
+          python3 tests/setup.py

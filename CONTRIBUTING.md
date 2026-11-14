@@ -17,6 +17,9 @@ cargo test --locked
 cargo build --locked
 python3 tests/e2e.py target/debug/flownote
 python3 tests/e2e.py target/debug/flownote --http
+python3 tests/installer.py
+python3 tests/setup.py
+shellcheck scripts/install.sh scripts/package.sh scripts/setup.sh
 ```
 
 The integration test starts only local fixture services and creates a temporary test certificate. It does not require a real panel. Keep `Cargo.lock` committed and use `--locked` when validating reproducibility.

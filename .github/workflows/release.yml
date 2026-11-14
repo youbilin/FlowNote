@@ -43,8 +43,9 @@ jobs:
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
-          shellcheck scripts/install.sh scripts/package.sh
+          shellcheck scripts/install.sh scripts/package.sh scripts/setup.sh
           python3 tests/installer.py
+          python3 tests/setup.py
       - name: Build static native package
         env:
           CC: musl-gcc

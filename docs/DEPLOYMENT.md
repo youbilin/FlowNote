@@ -1,11 +1,24 @@
-# FlowNote v0.3.2 部署指南
+# FlowNote v0.3.3 部署指南
 
 默认方案为 **`http://6.6.6.6/`**。从安装、面板 Token、访问日志权限到 Xray / 客户端分流的完整操作步骤均放在 [README 快速开始](../README.md#快速开始)，按顺序完成即可。无需域名、DNS、证书或面板订阅。6.6.6.6 是真实公网 IP，仅作为本地路由约定，必须在代理链路内截获。
+
+## 本机交互式配置（推荐）
+
+按官方脚本安装 3x-ui 后，运行 README 中带 `--setup` 的安装命令；已经升级到 v0.3.3 的用户执行 `sudo flownote-setup`。选择 `2`，确认检测出的面板地址、日志路径，输入不回显的 API Token 和真实 client email。向导需要 Python 3，仅使用标准库。成功后只需继续 README 的客户端规则和真实双账号验收。
+
+默认检测 `/usr/local/x-ui`、`/etc/x-ui/x-ui.db` 和 `bin/xray-linux-*`，面板端口 / webBasePath 从设置读取；HTTPS 面板不降级或跳过验证。`--detect` 只读，`--xui-dir` / `--db` / `--core` 支持显式路径。自动应用要求运行中的本机 systemd `x-ui`、SQLite 及相同网络命名空间；非标准部署使用手动配置。
+
+若没有持久化 `xrayTemplateConfig`，在面板 Xray 设置页保存一次现有配置再运行。确认前会生成 root 私有预览并运行内核 `run -test`；确认后在面板接口验证成功的前提下短暂停止 x-ui，备份数据库，事务更新单个模板设置，恢复 x-ui 并启动 FlowNote。流量统计不被整库替换。备份在 `/var/backups/flownote/`，包含敏感信息。失败时尝试恢复模板与原配置；日志 / ACL / 轮转文件可能保留。
+
+向导会用生成的 HTTP / 历史采样配置替换已有 FlowNote 自定义配置（先备份），并关闭 Xray 日志地址掩码以保留来源 IP:端口。默认日志 `/var/log/flownote-xray/access.log` 使用专用组权限，生成每日七次保留的 logrotate 配置；需要系统安装 `logrotate`。使用已有日志时，文件需存在；无法读取时需要 `acl` 工具，轮转后的读取权限由管理员保留。日志勿放 `/root` 或 `/home`。
 
 ## 安装目录
 
 | 路径 | 用途 |
 | --- | --- |
+| `/usr/local/bin/flownote-setup` | 交互式菜单入口 |
+| `/usr/local/share/flownote/setup.py` | Python 3 标准库向导 |
+| `/var/backups/flownote/` | 向导备份，仅 root 可读 |
 | `/usr/local/bin/flownote` | 当前二进制 |
 | `/usr/local/bin/flownote.previous` | 升级前二进制（已有安装时） |
 | `/etc/flownote/config.toml` | 实际配置，升级保留 |
@@ -15,16 +28,16 @@
 | `/etc/systemd/system/flownote.service` | systemd 单元 |
 | `/var/lib/flownote/history/` | 可选账号查询采样，0700 / 0600 权限 |
 
-首次安装创建 `flownote` 服务用户，不启动占位配置。安装脚本不修改 Xray 或客户端规则。脚本校验固定版本 HTTPS 发布资产、SHA-256、精确包内路径、文件类型及二进制版本；归档清单与安装包同源，不是独立签名。
+首次安装创建 `flownote` 服务用户，不启动占位配置。单独安装不修改 Xray；`--setup` 打开向导，确认后才修改模板。客户端规则需自行配置。脚本校验固定版本 HTTPS 发布资产、SHA-256、精确包内路径、文件类型及二进制版本；归档清单与安装包同源，不是独立签名。
 
 ## 安装包与安装脚本
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.2/install.sh
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.3/install.sh
 less install.sh
-sudo bash install.sh --version v0.3.2
+sudo bash install.sh --version v0.3.3
 # 只下载并校验，不修改系统：
-bash install.sh --version v0.3.2 --download-only ./flownote-download
+bash install.sh --version v0.3.3 --download-only ./flownote-download
 ```
 
 发布包支持 Linux amd64 / arm64，使用静态 musl。标准安装需要 systemd、Bash、curl、tar、sha256sum 和常见账户管理工具。也可从同版 Release 下载归档与 SHA256SUMS，在下载目录执行 `sha256sum --ignore-missing --check SHA256SUMS`，确认对应包显示 OK 后解压。
