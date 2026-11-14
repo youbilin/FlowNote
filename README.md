@@ -76,7 +76,7 @@ FlowNote 提供一张只读的流量手记：用户先连接管理员分配的�
 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.6/install.sh | sudo bash -s -- --version v0.3.6
 ```
 
-升级保留原配置与历史开关；如想停用原先已开启的曲线，将 `/etc/flownote/config.toml` 中 `[history]` 下的 `enabled` 改为 `false`，再执行 `sudo systemctl restart flownote`。已存历史不会自动删除。systemd 的 `MemoryMax=192M` 是上限，不代表预占 192 MB。可用 `ps -C flownote -o pid,rss,nlwp,%cpu,cmd` 查看实际用量，RSS 单位为 KiB。测量方法与环境见 [验证记录](docs/TESTING.md)。
+升级保留原配置与历史开关；如想停用原先已开启的曲线，将 `/etc/flownote/config.toml` 中 `[history]` 下的 `enabled` 改为 `false`，再执行 `sudo systemctl restart flownote`。已存历史不会自动删除。systemd 的 `MemoryMax=192M` 是上限，不代表预占 192 MB。可用 `ps -C flownote -o pid,rss,nlwp,%cpu,cmd` 查看实际用量，RSS 单位为 KiB。测量方法与环境见 [验证记录](docs/TESTING.md)。同机 amd64 静态包短测：新版空闲 RSS 3.29 MiB（两版均为几 MiB），线程 23 → 2、8 秒空闲读取调用 78 → 8；20 逻辑 CPU、关闭历史，具体服务器用量以实测为准。
 
 <a id="快速开始"></a>
 
