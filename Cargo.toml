@@ -1,0 +1,33 @@
+[package]
+name = "flownote"
+version = "0.3.0"
+edition = "2021"
+description = "Private HTTPS traffic self-service for 3x-ui users"
+license = "MIT"
+repository = "https://github.com/youbilin/FlowNote"
+readme = "README.md"
+keywords = ["3x-ui", "xray", "traffic", "dashboard", "https"]
+categories = ["web-programming::http-server"]
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["formatting", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "fs", "io-util", "sync"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "2"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

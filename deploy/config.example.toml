@@ -1,0 +1,27 @@
+# FlowNote v0.3 — 不需要开启面板订阅。
+[server]
+listen = "127.0.0.1:8686" # 强制回环；不要开放公网或转发此端口
+domain = "traffic.example.com" # 替换为你拥有的域名，不含 https:// 和端口
+max_conns = 128
+
+[tls]
+cert_file = "/etc/flownote/tls/fullchain.pem"
+key_file = "/etc/flownote/tls/privkey.pem"
+
+[xray]
+access_log = "/usr/local/x-ui/access.log"
+outbound_tag = "traffic-query"
+lookup_timeout_ms = 1500
+entry_ttl_secs = 600
+
+[panel]
+# 本机面板可使用回环 HTTP；远程面板必须使用有效证书的 HTTPS。
+# 有 webBasePath 时带上该路径。只支持 API Token，不做 Cookie 登录兼容。
+base_url = "http://127.0.0.1:2053"
+token_file = "/etc/flownote/token"
+cache_ttl_secs = 5
+timeout_secs = 5
+
+[display]
+title = "流量笺"
+tz_offset_hours = 8

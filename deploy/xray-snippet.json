@@ -1,0 +1,39 @@
+{
+  "_说明": "配置片段，不是完整 Xray 配置。将日志合并、出站追加、路由插到最前；删除下划线说明字段。域名必须替换。",
+  "log": {
+    "access": "/usr/local/x-ui/access.log",
+    "loglevel": "warning"
+  },
+  "outbounds_append": [
+    {
+      "tag": "traffic-query",
+      "protocol": "freedom",
+      "settings": {
+        "redirect": "127.0.0.1:8686",
+        "proxyProtocol": 2
+      }
+    }
+  ],
+  "routing_rules_insert_first": [
+    {
+      "type": "field",
+      "network": "udp",
+      "domain": [
+        "full:traffic.example.com"
+      ],
+      "port": "443",
+      "outboundTag": "block"
+    },
+    {
+      "type": "field",
+      "network": "tcp",
+      "domain": [
+        "full:traffic.example.com"
+      ],
+      "port": "443",
+      "outboundTag": "traffic-query"
+    }
+  ],
+  "_block出站": "如果没有 block 标签，追加 {\"tag\":\"block\",\"protocol\":\"blackhole\",\"settings\":{}}。不要改动默认出站。",
+  "_新版finalRules": "若 Xray 的 freedom 默认拦截私网目标，给 traffic-query.settings 加 finalRules: [{\"action\":\"allow\",\"network\":\"tcp\",\"ip\":[\"127.0.0.1\"],\"port\":\"8686\"}]；只对支持此字段的版本启用。不要全局放行私网。"
+}
