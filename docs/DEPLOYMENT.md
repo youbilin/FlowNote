@@ -1,10 +1,10 @@
-# FlowNote v0.3.3 部署指南
+# FlowNote v0.3.4 部署指南
 
 默认方案为 **`http://6.6.6.6/`**。从安装、面板 Token、访问日志权限到 Xray / 客户端分流的完整操作步骤均放在 [README 快速开始](../README.md#快速开始)，按顺序完成即可。无需域名、DNS、证书或面板订阅。6.6.6.6 是真实公网 IP，仅作为本地路由约定，必须在代理链路内截获。
 
 ## 本机交互式配置（推荐）
 
-按官方脚本安装 3x-ui 后，运行 README 中带 `--setup` 的安装命令；已经升级到 v0.3.3 的用户执行 `sudo flownote-setup`。选择 `2`，确认检测出的面板地址、日志路径，输入不回显的 API Token 和真实 client email。向导需要 Python 3，仅使用标准库。成功后只需继续 README 的客户端规则和真实双账号验收。
+按官方脚本安装 3x-ui 后，运行 README 中带 `--setup` 的安装命令；已经升级到 v0.3.4 的用户执行 `sudo flownote-setup`。选择 `2`，确认检测出的面板地址、日志路径，输入不回显的 API Token 和真实 client email。向导需要 Python 3，仅使用标准库。成功后只需继续 README 的客户端规则和真实双账号验收。
 
 默认检测 `/usr/local/x-ui`、`/etc/x-ui/x-ui.db` 和 `bin/xray-linux-*`，面板端口 / webBasePath 从设置读取；HTTPS 面板不降级或跳过验证。`--detect` 只读，`--xui-dir` / `--db` / `--core` 支持显式路径。自动应用要求运行中的本机 systemd `x-ui`、SQLite 及相同网络命名空间；非标准部署使用手动配置。
 
@@ -33,11 +33,11 @@
 ## 安装包与安装脚本
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.3/install.sh
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.4/install.sh
 less install.sh
-sudo bash install.sh --version v0.3.3
+sudo bash install.sh --version v0.3.4
 # 只下载并校验，不修改系统：
-bash install.sh --version v0.3.3 --download-only ./flownote-download
+bash install.sh --version v0.3.4 --download-only ./flownote-download
 ```
 
 发布包支持 Linux amd64 / arm64，使用静态 musl。标准安装需要 systemd、Bash、curl、tar、sha256sum 和常见账户管理工具。也可从同版 Release 下载归档与 SHA256SUMS，在下载目录执行 `sha256sum --ignore-missing --check SHA256SUMS`，确认对应包显示 OK 后解压。
@@ -92,3 +92,9 @@ HTTP / HTTPS 均需要真实 Xray 验收：不同账号 A / B 分别查询并对
 ## 故障排查
 
 完整现象对照表在 [README](../README.md#常见问题)。先使用 `--check-panel` 区分上游 API 问题和来源关联问题，再检查服务 / Xray 日志和客户端生效规则。不要公开上传真实 Token、UUID、订阅地址或未脱敏的访问日志。
+
+## 卸载与数据清理
+
+v0.3.4 菜单 `5` 提供保留数据卸载和完全清理，分别要求输入 `UNINSTALL` / `DELETE`。完整路径和注意事项见 [README 卸载与清理](../README.md#卸载与清理)。卸载前移除客户端分流规则，卸载后在面板撤销不用的 Token。
+
+先合并删除可核对的专用查询出站 / 路由，再测试候选配置、备份并事务更新单个模板设置；短暂重启 x-ui 验证恢复后才删除 FlowNote 程序 / 单元。失败或中断尝试恢复原模板并恢复原活动 FlowNote 服务。保留数据模式保留配置、证书、历史、账号、日志与备份。完全清理永久删除默认配置 / 历史 / 备份目录；专用日志仅在 Xray 不再使用时删除，否则保留日志、轮转与账号。自定义目录、共享日志 ACL、系统 journal 不清理。符号链接、挂载点或与 3x-ui 数据重叠的清理目录会被拒绝。

@@ -1,11 +1,11 @@
-# FlowNote v0.3.3 Linux package
+# FlowNote v0.3.4 Linux package
 
 Static musl binary for Linux amd64 or arm64. Includes HTTP / HTTPS templates, Xray routing fragments, a systemd unit, the Python 3 setup wizard and the MIT license.
 
 Verify the archive against SHA256SUMS from the same release. This detects corruption; it is not an independent signature. Review install.sh, then run:
 
 ```bash
-sudo bash install.sh --version v0.3.3 --setup
+sudo bash install.sh --version v0.3.4 --setup
 # Reopen the installed menu anytime:
 sudo flownote-setup
 # Inspect only:
@@ -36,3 +36,5 @@ For HTTPS, use config.https.example.toml and xray-https-snippet.json with your o
 Before sharing, perform the README real two-account tests, including same-NAT concurrency, reconnection, conflicting identities and log rotation. Service startup alone does not prove the identity chain. Never publish tokens, backup databases, candidate configs with node credentials or real logs.
 
 Full instructions: https://github.com/youbilin/FlowNote#readme
+
+Uninstall: run `sudo flownote-setup`, choose 5, then 1 + `UNINSTALL` to retain data or 2 + `DELETE` to purge default config/token/certificates, history and backups. Recognized Xray query rules are removed first, preserving nodes and counters; failures restore the template before any app deletion. Dedicated logs/rotation and the standard service account are removed only when unused. Custom paths, shared log ACLs and system journals remain. Remove client rules first and revoke panel tokens separately. Conflicting custom or HTTPS query rules require manual handling.

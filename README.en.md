@@ -8,7 +8,7 @@
 A minimal traffic dashboard for users sharing a 3x-ui server through individual accounts. No panel subscription or end-user login required.
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.3-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.4-246852)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [简体中文](README.md) · **English**
@@ -34,7 +34,7 @@ Screenshots use synthetic data. The UI is in Chinese; this README does not imply
 2. Install the fixed release:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.3/install.sh | sudo bash -s -- --version v0.3.3 --setup
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.4/install.sh | sudo bash -s -- --version v0.3.4 --setup
 ```
 
 The installer validates SHA-256, archive paths and binary version. First installs wait for configuration before starting. Existing configurations and secrets are preserved; active services restart on upgrade. You can download and inspect the script first, or use `--download-only ./flownote-download` without installing.
@@ -133,3 +133,9 @@ The preview contains synthetic static pages and needs no configuration or panel.
 ## License
 
 [MIT](LICENSE) © 2026 You Bilin. Independent project, not affiliated with 3x-ui or Xray.
+
+## Uninstall
+
+Upgrade to v0.3.4, run `sudo flownote-setup`, then select **5**. Choose **1** and type `UNINSTALL` to remove the application, menu and service while retaining configuration, token, certificates, history, logs and backups. Choose **2** and type `DELETE` to additionally erase `/etc/flownote`, `/var/lib/flownote` and `/var/backups/flownote`, plus unused dedicated logs/rotation and the standard service account. Purging includes private certificates and all recovery backups and cannot be undone.
+
+Both modes validate and remove only recognized wizard query outbounds/rules from the persistent Xray template, preserving nodes and traffic counters. Matching original backups can restore only unchanged log keys. Candidate-check or Xray-restart failure prevents application deletion; conflicting custom/HTTPS query rules need manual handling. If Xray still uses the dedicated log, its files, rotation and service account remain even during purge. Custom paths, shared log ACLs and system journals are retained. Remove client routing rules first and revoke unused panel API tokens separately.

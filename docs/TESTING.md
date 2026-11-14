@@ -1,3 +1,14 @@
+# v0.3.4 验证记录
+
+2026-11-14，Debian / WSL。本地卸载回归使用临时 SQLite 与文件、模拟 systemd / Xray / 用户管理命令，不修改真实主机服务。
+
+- `tests/setup.py`：48 组通过，新增查询配置反向合并、只恢复匹配日志键、重复安装备份检索、自定义 / 默认出站 / balancer 引用拒绝、固定路径 / 符号链接 / 挂载点保护、保留数据与完全清理、取消零写入、Xray 失败 / Ctrl-C 回退、仍在使用日志时保留账号、非标准账号保护。
+- `tests/installer.py`：9 组通过。
+- Rust fmt / clippy --all-targets、34 个单元测试、调试构建、37 项 HTTP 与 39 项 HTTPS / PROXY 集成检查通过。三个 shell 脚本通过 shellcheck。
+- 公开发布资产验证在发布后追加。
+
+---
+
 # v0.3.3 验证记录
 
 日期：2026-11-14。Debian / WSL，Rust 1.94.1，Python 3.13。本地及公开发布验证如下。

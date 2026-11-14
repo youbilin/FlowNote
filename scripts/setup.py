@@ -19,6 +19,7 @@ import time
 from urllib.parse import urlsplit
 
 KEYS = ("webPort", "webListen", "webBasePath", "webCertFile", "webKeyFile", "webDomain", "xrayTemplateConfig")
+BACKUP_ROOT = Path("/var/backups/flownote")
 QUERY = "traffic-query"
 BLOCK = "flownote-block"
 
@@ -362,7 +363,7 @@ def setup(args):
     final_rules = True
     merged = merged_config(template, access, final_rules)
     run_merged = merged_config(runtime, access, final_rules)
-    root = Path("/var/backups/flownote")
+    root = BACKUP_ROOT
     if root.is_symlink():
         raise ValueError("备份目录不能为符号链接")
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -442,6 +443,258 @@ def apply_changes(db, directory, original, replacement, config_path, config,
         raise ValueError("应用失败，已尝试恢复原 Xray 设置和 FlowNote 配置；日志文件 / ACL / 轮转配置可能保留。备份: " + str(directory)) from None
 
 
+# Uninstall operations stay in the same stdlib script so the menu can remove itself.
+APP_FILES = tuple(Path(p) for p in (
+    "/usr/local/bin/flownote", "/usr/local/bin/flownote.previous", "/usr/local/bin/flownote.new",
+    "/usr/local/bin/flownote-setup", "/etc/systemd/system/flownote.service",
+    "/etc/systemd/system/flownote.service.d",
+    "/usr/local/share/flownote"))
+DATA_PATHS = tuple(Path(p) for p in ("/etc/flownote", "/var/lib/flownote", "/var/backups/flownote"))
+LOG_PATHS = (Path("/var/log/flownote-xray"), Path("/etc/logrotate.d/flownote-xray"))
+
+
+def unmerged_config(original, before=None, after=None):
+    result = copy.deepcopy(original)
+    outbounds = result.get("outbounds", [])
+    routing = result.get("routing", {})
+    if not isinstance(outbounds, list) or not isinstance(routing, dict):
+        raise ValueError("Xray 配置结构异常，停止自动卸载")
+    rules = routing.get("rules", [])
+    if not isinstance(rules, list) or not all(isinstance(x, dict) for x in outbounds + rules):
+        raise ValueError("Xray 出站 / 路由结构异常，停止自动卸载")
+    reference = merged_config({"outbounds": [{"tag": "direct", "protocol": "freedom"}]}, "/var/log/access.log")
+    expected = reference["outbounds"][1:]
+    for wanted in expected:
+        found = [o for o in outbounds if o.get("tag") == wanted["tag"]]
+        if len(found) > 1:
+            raise ValueError("查询出站标签重复，请先人工检查")
+        for outbound in found:
+            candidate = copy.deepcopy(outbound)
+            if wanted["tag"] == QUERY:
+                final = candidate.get("settings", {}).pop("finalRules", None)
+                if final not in (None, wanted["settings"]["finalRules"]):
+                    raise ValueError("查询出站 finalRules 已自定义，停止自动卸载")
+                wanted["settings"].pop("finalRules")
+            if candidate != wanted or outbounds.index(outbound) == 0:
+                raise ValueError("查询出站已自定义或成为默认出站，停止自动卸载")
+    owned_rules = reference["routing"]["rules"]
+    if any(r.get("outboundTag") in (QUERY, BLOCK) and r not in owned_rules for r in rules):
+        raise ValueError("查询路由已自定义，请先人工移除相关出站引用")
+    result["outbounds"] = [o for o in outbounds if o.get("tag") not in (QUERY, BLOCK)]
+    if not result["outbounds"]:
+        raise ValueError("卸载会清空默认出站，停止操作")
+    if "rules" in routing:
+        result["routing"]["rules"] = [r for r in rules if r not in owned_rules]
+    removed_tags = [o["tag"] for o in outbounds if o.get("tag") in (QUERY, BLOCK)]
+    for balancer in routing.get("balancers", []):
+        if any(tag.startswith(prefix) for prefix in balancer.get("selector", [])
+               for tag in removed_tags if isinstance(prefix, str)):
+            raise ValueError("负载均衡 selector 仍匹配查询出站，停止自动卸载")
+    def references(value):
+        if isinstance(value, dict):
+            return any(references(v) for v in value.values())
+        if isinstance(value, list):
+            return any(references(v) for v in value)
+        return isinstance(value, str) and value in (QUERY, BLOCK)
+    if references(result):
+        raise ValueError("其他配置仍引用查询标签，请先人工检查")
+    # Restore only the two log keys changed by setup, only if they still match its output.
+    if before is not None and after is not None:
+        old_log, installed_log = before.get("log", {}), after.get("log", {})
+        log = result.get("log", {})
+        if not all(isinstance(x, dict) for x in (old_log, installed_log, log)):
+            raise ValueError("日志设置结构异常")
+        for key in ("access", "maskAddress"):
+            if key in installed_log and log.get(key) == installed_log[key]:
+                if key in old_log:
+                    log[key] = old_log[key]
+                else:
+                    log.pop(key, None)
+    return result
+
+
+def original_log_settings(root):
+    if root.is_symlink():
+        raise ValueError("备份目录不能为符号链接")
+    # Look back through repeat setups for the first template without our tags.
+    for directory in sorted(root.glob("*"), reverse=True):
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        db, after = directory / "x-ui.before.db", directory / "xray-template.after.json"
+        if db.is_symlink() or after.is_symlink() or not db.is_file() or not after.is_file():
+            continue
+        try:
+            before = load_json(read_settings(db)["xrayTemplateConfig"])
+            if any(o.get("tag") in (QUERY, BLOCK) for o in before.get("outbounds", [])):
+                continue
+            installed = load_json(after.read_text(encoding="utf-8"))
+            # Require an actual wizard-shaped template rather than an arbitrary saved file.
+            unmerged_config(installed)
+            if not any(o.get("tag") == QUERY for o in installed.get("outbounds", [])):
+                continue
+            return before, installed
+        except (OSError, ValueError, KeyError, AttributeError, sqlite3.Error):
+            continue
+    return None, None
+
+
+def checked_removal(path, allowed):
+    path = Path(path)
+    if path not in allowed or not path.is_absolute() or path.resolve() != path:
+        raise ValueError("拒绝清理非固定路径或符号链接: " + str(path))
+    if path.is_dir():
+        for directory, dirs, _ in os.walk(path, followlinks=False):
+            if os.path.ismount(directory) or any(os.path.ismount(Path(directory) / d) for d in dirs):
+                raise ValueError("清理目录包含挂载点，停止操作: " + str(path))
+    return path
+
+
+def remove_owned(path, allowed):
+    path = checked_removal(path, allowed)
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
+def uninstall_xray(db, original, replacement, directory, core):
+    stopped = updated = False
+    try:
+        stopped = True
+        command(["systemctl", "stop", "x-ui"])
+        updated = True
+        snapshot_and_update(db, directory / "x-ui.before.db", original, replacement)
+        command(["systemctl", "start", "x-ui"])
+        wait_service("x-ui", core)
+    except BaseException:
+        rollback_failed = False
+        if updated:
+            try:
+                command(["systemctl", "stop", "x-ui"])
+                restore_setting(db, replacement, original)
+            except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+                rollback_failed = True
+        if stopped:
+            try:
+                command(["systemctl", "start", "x-ui"])
+                wait_service("x-ui", core)
+            except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+                rollback_failed = True
+        if rollback_failed:
+            print("Xray 自动回退未全部成功，请检查 x-ui 服务与备份。", file=sys.stderr)
+        raise ValueError("查询配置清理失败，已尝试恢复模板；尚未删除 FlowNote 文件。备份: " + str(directory)) from None
+
+
+def remove_service_account():
+    try:
+        account = pwd.getpwnam("flownote")
+    except KeyError:
+        return
+    if account.pw_uid == 0 or account.pw_dir != "/var/lib/flownote" or account.pw_shell not in ("/usr/sbin/nologin", "/sbin/nologin"):
+        print("flownote 账号不是标准服务账号，已保留，请人工检查。")
+        return
+    command(["userdel", "flownote"])  # Never use --remove: only fixed paths above may be deleted.
+    try:
+        group = grp.getgrnam("flownote")
+    except KeyError:
+        return
+    if group.gr_gid != 0 and not group.gr_mem:
+        command(["groupdel", "flownote"])
+
+
+def uninstall(args):
+    print("\n卸载与清理\n  1. 卸载程序，保留配置、Token、历史数据和备份\n  2. 完全清理（同时删除上述数据及可安全移除的专用日志）\n  0. 返回")
+    mode = ask("选择", "0")
+    if mode not in ("1", "2"):
+        return False
+    purge = mode == "2"
+    db = Path(args.db).resolve()
+    original = replacement = core = cleaned = None
+    panel_active = subprocess.run(["systemctl", "is-active", "--quiet", "x-ui"], timeout=5).returncode == 0
+    if db.is_file():
+        settings = read_settings(db)
+        original = settings.get("xrayTemplateConfig")
+        if panel_active or original:
+            base, _, core, _, _ = discover(args)
+            if panel_active:
+                check_environment(base, db, core)
+        if original:
+            template = load_json(original)
+            before, after = original_log_settings(BACKUP_ROOT)
+            cleaned = unmerged_config(template, before, after)
+            if cleaned != template:
+                if not panel_active:
+                    raise ValueError("请先启动 x-ui，核对运行环境后再清理查询配置")
+                replacement = json.dumps(cleaned, ensure_ascii=False)
+        elif panel_active:
+            # Fresh panel installs may never have persisted their template. Inspect but never persist runtime output.
+            cleaned = load_json((core.parent / "config.json").read_text(encoding="utf-8"))
+            if unmerged_config(cleaned) != cleaned:
+                raise ValueError("仅发现运行时查询配置，请先在面板保存持久化模板后再卸载")
+        else:
+            raise ValueError("面板没有持久化模板且未运行，无法核对查询配置；请启动 x-ui 后重试")
+    elif panel_active:
+        raise ValueError("x-ui 正在运行但未找到数据库，请用 --db 指定实际文件后卸载")
+    log_in_use = cleaned is not None and "/var/log/flownote-xray" in json.dumps(cleaned)
+    allowed = set(APP_FILES + (DATA_PATHS + (() if log_in_use else LOG_PATHS) if purge else ()))
+    protected = (db, Path(args.xui_dir).resolve()) + ((core,) if core else ())
+    for path in sorted(allowed):
+        checked_removal(path, allowed)
+        if any(target == path or path in target.parents for target in protected):
+            raise ValueError("3x-ui 文件与清理目录重叠，停止卸载: " + str(path))
+    print("将停止并禁用 FlowNote，移除程序、菜单和 systemd 单元。")
+    print("仅移除可核对的 FlowNote 查询出站 / 路由；3x-ui、节点和流量统计保留。")
+    print("请先删除客户端的 6.6.6.6 分流规则；Xray 配置变更会短暂重启 x-ui。")
+    if purge:
+        print("将永久删除 /etc/flownote、/var/lib/flownote、/var/backups/flownote（含 Token、证书、历史和备份）。")
+        print("自定义到这些目录以外的文件保留；共享日志、系统 journal 和面板 API Token 需另行处理。")
+    if log_in_use:
+        print("Xray 仍使用专用日志：保留该日志、轮转配置和服务账号，避免破坏面板日志。")
+    confirmation = "DELETE" if purge else "UNINSTALL"
+    if input("输入 " + confirmation + " 确认，其他输入取消: ").strip() != confirmation:
+        print("已取消。")
+        return False
+    was_active = subprocess.run(["systemctl", "is-active", "--quiet", "flownote"], timeout=5).returncode == 0
+    directory = None
+    if replacement is not None:
+        root = BACKUP_ROOT
+        if root.is_symlink():
+            raise ValueError("备份目录不能为符号链接")
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chown(root, 0, 0)
+        os.chmod(root, 0o700)
+        directory = Path(tempfile.mkdtemp(prefix="uninstall-", dir=str(root)))
+        write_private(directory / "xray-template.after.json", json.dumps(cleaned, ensure_ascii=False, indent=2))
+        runtime = load_json((core.parent / "config.json").read_text(encoding="utf-8"))
+        test_xray(core, unmerged_config(runtime, before, after), directory)
+    command(["systemctl", "stop", "flownote"])
+    try:
+        if replacement is not None:
+            uninstall_xray(db, original, replacement, directory, core)
+    except BaseException:
+        if was_active:
+            command(["systemctl", "start", "flownote"])
+        raise
+    command(["systemctl", "disable", "flownote"])
+    # Recheck exact paths immediately before each deletion; do not follow links or mounts.
+    for path in APP_FILES:
+        remove_owned(path, allowed)
+    command(["systemctl", "daemon-reload"])
+    subprocess.run(["systemctl", "reset-failed", "flownote"], capture_output=True, timeout=5)
+    if purge:
+        for path in DATA_PATHS[:2] + (() if log_in_use else LOG_PATHS):
+            remove_owned(path, allowed)
+        if not log_in_use:
+            try:
+                remove_service_account()
+            except (OSError, subprocess.SubprocessError):
+                print("程序与数据已清理，服务账号删除失败，请检查是否有残留进程。")
+        remove_owned(DATA_PATHS[2], allowed)  # Drop rollback backups only after every other cleanup step.
+    print("FlowNote 已卸载。" + ("默认目录的数据已清理。" if purge else "配置、Token、历史与备份已保留。"))
+    print("请在面板撤销不再使用的 API Token；客户端分流规则与系统 journal 不会自动修改。")
+    print("自定义日志文件及其 ACL 保留，请按原部署方式清理；不会删除共享 Xray 日志。")
+    return True
+
 def client_rules():
     print("\nClash / Mihomo rules 最前面添加（替换策略名）：")
     print("  - IP-CIDR,6.6.6.6/32,你的节点或策略组,no-resolve")
@@ -465,7 +718,7 @@ def main():
     if not sys.stdin.isatty():
         parser.error("需要交互终端；请下载脚本后运行，不要把输入管道当成终端")
     while True:
-        print("\n流量笺 · FlowNote\n  1. 检测 3x-ui 安装\n  2. 配置 HTTP 查询入口\n  3. 查看服务状态与日志\n  4. 显示客户端分流规则\n  0. 退出")
+        print("\n流量笺 · FlowNote\n  1. 检测 3x-ui 安装\n  2. 配置 HTTP 查询入口\n  3. 查看服务状态与日志\n  4. 显示客户端分流规则\n  5. 卸载与清理\n  0. 退出")
         choice = ask("选择", "0")
         try:
             if choice == "0":
@@ -479,6 +732,9 @@ def main():
                 subprocess.run(["journalctl", "-u", "flownote", "-n", "30", "--no-pager"], timeout=15)
             elif choice == "4":
                 client_rules()
+            elif choice == "5":
+                if uninstall(args):
+                    return
         except (ValueError, KeyError) as exc:
             print("操作未完成: " + str(exc), file=sys.stderr)
         except (OSError, sqlite3.Error, subprocess.SubprocessError):

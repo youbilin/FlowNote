@@ -9,7 +9,7 @@
 面向 3x-ui 拼节点用户的轻量流量查询页。无需开启面板订阅，无需用户登录。
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.3-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.4-246852)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust&logoColor=white)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -94,7 +94,7 @@ FlowNote 提供一张只读的流量手记：用户先连接管理员分配的�
 支持 **Linux amd64 / arm64**，自动识别架构，使用预编译静态二进制，不需要在 VPS 上编译 Rust：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.3/install.sh | sudo bash -s -- --version v0.3.3 --setup
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.4/install.sh | sudo bash -s -- --version v0.3.4 --setup
 ```
 
 安装脚本下载固定版本、校验 SHA-256、包内路径和二进制版本，安装程序与 systemd 服务后打开配置菜单。**需要 Python 3（仅使用标准库）；缺少时先执行 `sudo apt-get install -y python3`。** 单独安装不改 Xray；选择菜单配置并确认后，才会合并查询路由并启动服务。安装或升级保留已有配置和数据；活动服务升级会短暂重启，向导应用配置时另有备份与确认。
@@ -102,14 +102,14 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/relea
 想先审阅脚本，或只下载离线包：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.3/install.sh
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.4/install.sh
 less install.sh
-sudo bash install.sh --version v0.3.3 --setup
+sudo bash install.sh --version v0.3.4 --setup
 # 只下载并校验，不安装：
-bash install.sh --version v0.3.3 --download-only ./flownote-download
+bash install.sh --version v0.3.4 --download-only ./flownote-download
 ```
 
-[预编译包及 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.3)。清单用于发现下载损坏，不是独立签名。
+[预编译包及 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.4)。清单用于发现下载损坏，不是独立签名。
 
 ### 交互式配置：已经安装 3x-ui，直接用菜单
 
@@ -125,6 +125,7 @@ sudo flownote-setup
   2. 配置 HTTP 查询入口
   3. 查看服务状态与日志
   4. 显示客户端分流规则
+  5. 卸载与清理
   0. 退出
 ```
 
@@ -158,6 +159,24 @@ sudo flownote-setup --xui-dir /实际面板目录 --db /实际目录/x-ui.db --c
 ```
 
 自动配置支持本机 systemd `x-ui` 服务与 SQLite；会核对运行中的面板路径、数据库目录和网络命名空间。Docker、PostgreSQL、远程面板或其他非标准部署请按下面的手动方式配置；已有 HTTPS 查询配置请先人工检查，向导不会覆盖冲突的同名出站。
+
+### 卸载与清理
+
+运行 `sudo flownote-setup`，选择 **`5. 卸载与清理`**。旧版本没有这个菜单时，先用上面的安装命令升级到 v0.3.4。
+
+```text
+卸载与清理
+  1. 卸载程序，保留配置、Token、历史数据和备份
+  2. 完全清理（同时删除上述数据及可安全移除的专用日志）
+  0. 返回
+```
+
+- **选 1，输入 `UNINSTALL`**：停止并禁用服务，移除程序、菜单、systemd 单元及专用 drop-in 目录；保留配置、Token、证书、历史、日志、服务账号与备份，方便重装。
+- **选 2，输入 `DELETE`**：另行永久删除 `/etc/flownote/`、`/var/lib/flownote/`、`/var/backups/flownote/`，包含 Token、证书、历史采样和所有备份。可安全移除时还会清理专用日志目录、轮转配置及标准服务账号。删除无法撤销。
+
+两种方式都会先核对持久化 Xray 模板，只移除匹配向导的查询出站和路由；3x-ui、现有节点、面板登录及流量统计保留。若原安装备份仍可核对，只恢复未被另行修改的日志路径 / 地址掩码设置；不覆盖其他新设置。Xray 配置检查或重启失败时尝试回退，保留 FlowNote 文件。自定义出站、HTTPS 查询路由、其他配置仍引用查询标签时会停止，需先人工处理。
+
+**先在客户端移除 `6.6.6.6` 分流规则。** Xray 配置变更会短暂重启 x-ui；卸载后在面板撤销不用的 API Token。自定义目录、共享 Xray 日志及其 ACL、系统 journal 不会自动删除。无法核对原日志设置且 Xray 仍使用 `/var/log/flownote-xray/` 时，即使选完全清理也会保留该日志、轮转配置和服务账号，并明确提示。
 
 ### 3. 手动配置备用：填写面板 Token 和服务配置
 

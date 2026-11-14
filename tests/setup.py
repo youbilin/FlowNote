@@ -304,5 +304,247 @@ class Setup(unittest.TestCase):
             wizard.merged_config(value, "/var/log/access.log")
 
 
+    def test_unmerge_preserves_nodes_and_restores_only_log_keys(self):
+        installed = wizard.merged_config(self.template, "/var/log/flownote-xray/access.log")
+        current = copy.deepcopy(installed)
+        current["log"]["loglevel"] = "debug"
+        current["policy"]["system"] = {"statsInboundUplink": True}
+        cleaned = wizard.unmerged_config(current, self.template, installed)
+        self.assertEqual(cleaned["outbounds"], self.template["outbounds"])
+        self.assertEqual(cleaned["inbounds"], self.template["inbounds"])
+        self.assertEqual(cleaned["routing"], self.template["routing"])
+        self.assertEqual(cleaned["log"]["access"], "none")
+        self.assertEqual(cleaned["log"]["loglevel"], "debug")
+        self.assertNotIn("maskAddress", cleaned["log"])
+        self.assertIn("system", cleaned["policy"])
+        self.assertEqual(current["log"]["access"], "/var/log/flownote-xray/access.log")
+
+    def test_unmerge_keeps_custom_log_and_is_idempotent(self):
+        installed = wizard.merged_config(self.template, "/var/log/access.log")
+        current = copy.deepcopy(installed)
+        current["log"]["access"] = "/var/log/changed.log"
+        current["log"]["maskAddress"] = "quarter"
+        cleaned = wizard.unmerged_config(current, self.template, installed)
+        self.assertEqual(cleaned["log"], current["log"])
+        self.assertEqual(wizard.unmerged_config(cleaned), cleaned)
+
+    def test_unmerge_refuses_custom_or_default_query_outbound(self):
+        for kind in ("redirect", "finalRules", "default", "duplicate"):
+            value = wizard.merged_config(self.template, "/var/log/access.log")
+            query = next(o for o in value["outbounds"] if o["tag"] == wizard.QUERY)
+            if kind == "default":
+                value["outbounds"].remove(query)
+                value["outbounds"].insert(0, query)
+            elif kind == "duplicate":
+                value["outbounds"].append(query)
+            else:
+                query["settings"][kind] = "custom"
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                wizard.unmerged_config(value)
+
+    def test_unmerge_refuses_custom_routes_and_balancer_references(self):
+        for rule in ({"type": "field", "domain": ["example.com"], "outboundTag": wizard.QUERY}, None, "prefix"):
+            value = wizard.merged_config(self.template, "/var/log/access.log")
+            if isinstance(rule, dict):
+                value["routing"]["rules"].append(rule)
+            else:
+                value["routing"]["balancers"] = [{"tag": "shared", "selector": ["traffic-" if rule == "prefix" else wizard.QUERY]}]
+            with self.assertRaises(ValueError):
+                wizard.unmerged_config(value)
+
+    def test_unmerge_accepts_old_core_without_final_rules(self):
+        value = wizard.merged_config(self.template, "/var/log/access.log", False)
+        self.assertEqual(wizard.unmerged_config(value)["outbounds"], self.template["outbounds"])
+
+    def test_original_log_settings_searches_past_repeat_setups(self):
+        installed = wizard.merged_config(self.template, "/var/log/flownote-xray/access.log")
+        for name, original in (("001", self.original), ("002", json.dumps(installed))):
+            directory = self.root / "backups" / name
+            directory.mkdir(parents=True)
+            with wizard.connection(directory / "x-ui.before.db") as conn:
+                conn.execute("CREATE TABLE settings (key TEXT,value TEXT)")
+                conn.execute("INSERT INTO settings VALUES ('xrayTemplateConfig',?)", (original,))
+            (directory / "xray-template.after.json").write_text(json.dumps(installed))
+        before, after = wizard.original_log_settings(self.root / "backups")
+        self.assertEqual(before, self.template)
+        self.assertEqual(after, installed)
+
+    def test_fixed_cleanup_rejects_symlink_and_unlisted_path(self):
+        target = self.root / "outside"
+        target.mkdir()
+        (target / "keep").write_text("keep")
+        link = self.root / "owned"
+        link.symlink_to(target, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            wizard.remove_owned(link, {link})
+        with self.assertRaises(ValueError):
+            wizard.remove_owned(target, {link})
+        self.assertEqual((target / "keep").read_text(), "keep")
+
+    def test_fixed_cleanup_refuses_nested_mount_and_keeps_external_link(self):
+        owned = self.root / "owned"
+        nested = owned / "nested"
+        nested.mkdir(parents=True)
+        with patch.object(wizard.os.path, "ismount", side_effect=lambda p: Path(p) == nested):
+            with self.assertRaises(ValueError):
+                wizard.remove_owned(owned, {owned})
+        external = self.root / "outside"
+        external.write_text("keep")
+        (owned / "link").symlink_to(external)
+        wizard.remove_owned(owned, {owned})
+        self.assertEqual(external.read_text(), "keep")
+        self.assertFalse(owned.exists())
+
+    def uninstall_fixture(self, mode="1", confirmation=None, fail=False, modified=False, restore=True, interrupt=False, fresh=None, overlap=False):
+        installed = wizard.merged_config(self.template, "/var/log/flownote-xray/access.log")
+        if modified:
+            installed["outbounds"][2]["settings"]["redirect"] = "127.0.0.1:9999"
+        with wizard.connection(self.db) as conn:
+            conn.execute("UPDATE settings SET value=? WHERE key='xrayTemplateConfig'", (json.dumps(installed),))
+        if fresh:
+            with wizard.connection(self.db) as conn:
+                conn.execute("DELETE FROM settings WHERE key='xrayTemplateConfig'")
+        app = (self.root / "bin/flownote", self.root / "bin/flownote-setup", self.root / "share")
+        data = (self.root / "config", self.root / "history", self.root / "backups")
+        logs = (self.root / "logs", self.root / "rotate")
+        for path in (app[0], app[1]):
+            path.parent.mkdir(exist_ok=True)
+            path.write_text("installed")
+        for path in (app[2],) + data + logs:
+            path.mkdir()
+            (path / "keep").write_text("private fixture")
+        core = self.root / "panel/bin/xray"
+        core.parent.mkdir(parents=True)
+        (core.parent / "config.json").write_text(json.dumps(self.template if fresh == "clean" else installed))
+        args = wizard.argparse.Namespace(db=str(self.db), xui_dir=str(core.parent.parent), core=str(core))
+        calls = []
+        failed = False
+        def run(arguments, **kwargs):
+            nonlocal failed
+            calls.append(arguments)
+            if fail and not failed and arguments == ["systemctl", "start", "x-ui"]:
+                failed = True
+                if interrupt:
+                    raise KeyboardInterrupt()
+                raise wizard.subprocess.CalledProcessError(1, arguments)
+        with patch.object(wizard, "APP_FILES", app), patch.object(wizard, "DATA_PATHS", (self.root, data[1], data[2]) if overlap else data), \
+             patch.object(wizard, "LOG_PATHS", logs), patch.object(wizard, "BACKUP_ROOT", data[2]), \
+             patch.object(wizard, "original_log_settings", return_value=(self.template, installed) if restore else (None, None)), \
+             patch.object(wizard, "discover", return_value=(core.parent.parent, self.db, core, {}, None)), \
+             patch.object(wizard, "check_environment"), patch.object(wizard, "test_xray"), \
+             patch.object(wizard, "wait_service"), patch.object(wizard, "remove_service_account") as account, \
+             patch.object(wizard, "command", side_effect=run), patch.object(wizard.os, "fchown"), \
+             patch.object(wizard.os, "chown"), patch.object(wizard.subprocess, "run", return_value=wizard.subprocess.CompletedProcess([],0)), \
+             patch("builtins.input", side_effect=[mode, confirmation or ("DELETE" if mode == "2" else "UNINSTALL")]):
+            if fail or modified or fresh == "query" or overlap:
+                with self.assertRaises(ValueError):
+                    wizard.uninstall(args)
+                result = None
+            else:
+                result = wizard.uninstall(args)
+            account_deleted = account.called
+        return app, data, logs, calls, result, account_deleted, installed
+
+    def test_uninstall_keep_mode_preserves_token_history_and_backups(self):
+        app, data, logs, calls, result, account, installed = self.uninstall_fixture()
+        self.assertTrue(result)
+        self.assertTrue(all(not p.exists() for p in app))
+        self.assertTrue(all((p / "keep").is_file() for p in data + logs))
+        self.assertFalse(account)
+        self.assertEqual(json.loads(self.setting("xrayTemplateConfig")), self.template)
+        self.assertEqual(self.setting("subEnable"), "false")
+        self.assertIn(["systemctl", "disable", "flownote"], calls)
+
+    def test_uninstall_purge_removes_only_allowed_data_after_panel_recovery(self):
+        app, data, logs, calls, result, account, _ = self.uninstall_fixture("2")
+        self.assertTrue(result and account)
+        self.assertTrue(all(not p.exists() for p in app + data + logs))
+        self.assertTrue(self.db.is_file())
+        with wizard.connection(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT up FROM client_traffics").fetchone()[0], 1234)
+        self.assertLess(calls.index(["systemctl", "start", "x-ui"]), calls.index(["systemctl", "disable", "flownote"]))
+
+    def test_uninstall_cancel_has_no_host_mutations(self):
+        app, data, _, calls, result, account, _ = self.uninstall_fixture("2", "no")
+        self.assertFalse(result or account or calls)
+        self.assertTrue(all(p.exists() for p in app + data))
+
+    def test_uninstall_panel_failure_keeps_files_and_restores_template(self):
+        app, data, _, calls, _, account, installed = self.uninstall_fixture("2", fail=True)
+        self.assertTrue(all(p.exists() for p in app + data))
+        self.assertFalse(account)
+        self.assertEqual(json.loads(self.setting("xrayTemplateConfig")), installed)
+        self.assertNotIn(["systemctl", "disable", "flownote"], calls)
+        self.assertIn(["systemctl", "start", "flownote"], calls)
+
+    def test_uninstall_modified_query_stops_before_confirmation_or_removal(self):
+        app, data, _, calls, _, _, _ = self.uninstall_fixture("2", modified=True)
+        self.assertTrue(all(p.exists() for p in app + data))
+        self.assertFalse(calls)
+
+    def test_uninstall_preserves_log_and_account_if_original_log_cannot_be_restored(self):
+        app, data, logs, _, result, account, _ = self.uninstall_fixture("2", restore=False)
+        self.assertTrue(result)
+        self.assertFalse(account)
+        self.assertTrue(all(not p.exists() for p in app + data))
+        self.assertTrue(all(p.exists() for p in logs))
+        self.assertEqual(json.loads(self.setting("xrayTemplateConfig"))["log"]["access"], "/var/log/flownote-xray/access.log")
+
+    def test_uninstall_interrupt_restores_template_and_keeps_app(self):
+        app, data, _, _, _, _, installed = self.uninstall_fixture("2", fail=True, interrupt=True)
+        self.assertTrue(all(p.exists() for p in app + data))
+        self.assertEqual(json.loads(self.setting("xrayTemplateConfig")), installed)
+
+    def test_uninstall_menu_back_does_not_read_or_write_host(self):
+        with patch("builtins.input", return_value="0"), patch.object(wizard, "command") as command, patch.object(wizard, "read_settings") as read:
+            self.assertFalse(wizard.uninstall(wizard.argparse.Namespace()))
+            command.assert_not_called()
+            read.assert_not_called()
+
+    def test_service_account_cleanup_refuses_root_or_nonstandard_user(self):
+        for uid, home, shell in ((0, "/var/lib/flownote", "/usr/sbin/nologin"), (1000, "/home/user", "/bin/bash")):
+            user = wizard.argparse.Namespace(pw_uid=uid, pw_dir=home, pw_shell=shell)
+            with patch.object(wizard.pwd, "getpwnam", return_value=user), patch.object(wizard, "command") as command:
+                wizard.remove_service_account()
+                command.assert_not_called()
+
+    def test_uninstall_fresh_panel_without_persisted_template_needs_no_restart(self):
+        app, data, _, calls, result, _, _ = self.uninstall_fixture(fresh="clean")
+        self.assertTrue(result)
+        self.assertTrue(all(not p.exists() for p in app))
+        self.assertTrue(all(p.exists() for p in data))
+        self.assertNotIn(["systemctl", "stop", "x-ui"], calls)
+
+    def test_uninstall_runtime_only_query_config_requires_persisted_template(self):
+        app, _, _, calls, _, _, _ = self.uninstall_fixture(fresh="query")
+        self.assertTrue(all(p.exists() for p in app))
+        self.assertFalse(calls)
+
+    def test_uninstall_refuses_purge_directory_containing_panel_database(self):
+        app, _, _, calls, _, _, _ = self.uninstall_fixture(mode="2", overlap=True)
+        self.assertTrue(self.db.is_file())
+        self.assertTrue(all(p.exists() for p in app))
+        self.assertFalse(calls)
+
+    def test_uninstall_running_panel_with_missing_db_stops_without_file_removal(self):
+        args = wizard.argparse.Namespace(db=str(self.root / "missing.db"))
+        with patch("builtins.input", return_value="2"), patch.object(wizard.subprocess, "run", return_value=wizard.subprocess.CompletedProcess([],0)), patch.object(wizard, "command") as command:
+            with self.assertRaisesRegex(ValueError, "--db"):
+                wizard.uninstall(args)
+            command.assert_not_called()
+        self.assertFalse(Path(args.db).exists())
+
+    def test_uninstall_concurrent_template_edit_is_preserved_and_panel_restarted(self):
+        other = json.dumps(dict(self.template, concurrent="keep"))
+        def changed(*args):
+            with wizard.connection(self.db) as conn:
+                conn.execute("UPDATE settings SET value=? WHERE key='xrayTemplateConfig'", (other,))
+            raise ValueError("concurrent edit")
+        with patch.object(wizard, "snapshot_and_update", side_effect=changed), patch.object(wizard, "command") as command, patch.object(wizard, "wait_service"):
+            with self.assertRaises(ValueError):
+                wizard.uninstall_xray(self.db, self.original, "replacement", self.root, self.root / "xray")
+            self.assertIn(unittest.mock.call(["systemctl", "start", "x-ui"]), command.call_args_list)
+        self.assertEqual(self.setting("xrayTemplateConfig"), other)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
