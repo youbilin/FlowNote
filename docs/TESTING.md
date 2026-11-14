@@ -1,12 +1,22 @@
 # v0.3.3 验证记录
 
-日期：2026-11-14。Debian / WSL，Rust 1.94.1，Python 3.13。以下为本地测试；公开发布结果在发布后追加。
+日期：2026-11-14。Debian / WSL，Rust 1.94.1，Python 3.13。本地及公开发布验证如下。
 
 - Rust fmt / clippy --all-targets、34 个单元测试及调试构建通过。
 - 37 项 HTTP / PROXY、39 项 HTTPS / PROXY 集成检查通过，使用合成面板与日志。
 - `python3 tests/setup.py`：26 组通过，覆盖 SQLite 白名单、实际面板地址、运行环境 / 数据库 / 命名空间核对、模板保留与冲突拒绝、Xray 候选检查、私有文件、单设置事务、备份 / 并发保护、面板失败、启动失败和 Ctrl-C 回退。
 - `python3 tests/installer.py`：9 组通过，含 `--setup` 与离线模式冲突、无交互终端拒绝、向导文件的包内清单检查。
 - 向导测试只使用临时文件与模拟主机命令，不修改当前主机服务；未在用户真实 VPS 执行自动安装 / 配置，仍需双账号验收。
+
+## v0.3.3 公开发布验证
+
+2026-11-14：[CI](https://github.com/youbilin/FlowNote/actions/runs/43601806730) 全部通过；[Release 工作流](https://github.com/youbilin/FlowNote/actions/runs/43601943499) 的原生 amd64、arm64 与发布任务全部通过，v0.3.3 已公开发布。
+
+- 从公开 Release 重新下载两个归档、install.sh 和 SHA256SUMS，三个资产摘要全部匹配；readelf 确认 X86-64 / AArch64 且均无动态解释器。
+- 两个包均包含 setup.py / setup.sh；实际下载的 amd64 二进制版本为 0.3.3，再次通过 37 项 HTTP 与 39 项 HTTPS / PROXY 集成检查。
+- 实际发布的 setup.py 帮助与 PTY 菜单通过，进入客户端规则页并正常退出；没有执行主机配置。
+- 实际发布的 install.sh 以 `--version v0.3.3 --download-only` 从 GitHub 远程下载、校验并保存包成功。
+- 未在用户真实 VPS 执行 root 安装或修改 3x-ui；向导的应用 / 回退检查使用模拟主机命令与临时 SQLite，真实双账号验收仍由目标环境完成。
 
 ---
 
