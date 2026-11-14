@@ -20,3 +20,9 @@ Do not open a public issue with exploitation details or real user data. Include 
 - HTTPS protects transmission. It does not establish that a log-based account association is correct.
 
 See [the design document](docs/DESIGN.md) and [deployment acceptance checks](docs/DEPLOYMENT.md) for the complete operational assumptions.
+
+## Release installation and query history
+
+Install only from the project's tagged GitHub Releases. The installer uses HTTPS, validates SHA-256, rejects unexpected archive paths and links, and checks the binary version. The manifest shares the release channel and does not provide independent signature verification. Review the installer before running it with root privileges. Existing configurations and secrets are preserved; a first installation does not start with placeholder credentials.
+
+Optional history stores per-account cumulative query samples under `/var/lib/flownote/history` with restrictive permissions. SHA-256 account filenames are pseudonymous identifiers, not encryption. Protect backups as user data. Retention and capacity are bounded, with cleanup triggered by queries rather than a background scheduler; files can remain while idle. Disable history and remove the state directory to erase records. History failures do not prevent current traffic queries. Identity-association limitations also apply to history: enabling persistence does not improve account authentication.

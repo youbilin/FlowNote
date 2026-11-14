@@ -1,4 +1,4 @@
-use crate::{config::DisplayCfg, panel::ClientTraffic};
+use crate::{config::DisplayCfg, history::Sample, panel::ClientTraffic};
 use serde::Serialize;
 use time::{macros::format_description, OffsetDateTime, UtcOffset};
 
@@ -147,9 +147,15 @@ struct JsonOut<'a> {
     expiry_time_ms: i64,
     last_online_ms: i64,
     generated_at_ms: i64,
+    history: &'a [Sample],
+    history_kind: &'static str,
 }
 
 pub fn json(t: &ClientTraffic, now_ms: i64) -> String {
+    json_with_history(t, now_ms, &[])
+}
+
+pub fn json_with_history(t: &ClientTraffic, now_ms: i64, samples: &[Sample]) -> String {
     let c = calc(t);
     serde_json::to_string_pretty(&JsonOut {
         email: &t.email,
@@ -164,6 +170,8 @@ pub fn json(t: &ClientTraffic, now_ms: i64) -> String {
         expiry_time_ms: t.expiry_time,
         last_online_ms: t.last_online,
         generated_at_ms: now_ms,
+        history: samples,
+        history_kind: "query_samples_cumulative_bytes",
     })
     .unwrap_or_else(|_| "{}".into())
         + "\n"
@@ -184,17 +192,25 @@ fn page(d: &DisplayCfg, content: &str) -> String {
 }
 
 pub fn html(t: &ClientTraffic, d: &DisplayCfg, now_ms: i64) -> String {
+    html_with_history(t, d, now_ms, &[])
+}
+
+pub fn html_with_history(
+    t: &ClientTraffic,
+    d: &DisplayCfg,
+    now_ms: i64,
+    samples: &[Sample],
+) -> String {
     let c = calc(t);
     let st = status(t, now_ms);
-    let low = c.percent.is_some_and(|p| p >= 90.0);
     let tone = if st != "正常" {
         "danger"
-    } else if low {
+    } else if c.percent.is_some_and(|p| p >= 90.0) {
         "warning"
     } else {
         "healthy"
     };
-    let remaining = c.remaining.map(human).unwrap_or_else(|| "不限流量".into());
+    let remaining = c.remaining.map(human).unwrap_or_else(|| "不限".into());
     let pct = c
         .percent
         .map(|p| format!("{p:.1}"))
@@ -204,47 +220,92 @@ pub fn html(t: &ClientTraffic, d: &DisplayCfg, now_ms: i64) -> String {
     } else {
         "不限".into()
     };
-    let progress = if t.total > 0 {
-        format!("已使用 {pct}%")
-    } else {
-        "按需使用 · 无配额上限".into()
+    let expiry = match t.expiry_time {
+        0 => "不限期".into(),
+        n if n < 0 => format!("激活后 {} 天", n.saturating_abs() / DAY_MS),
+        n => fmt_ts(n, d.tz_offset_hours).chars().take(16).collect(),
     };
-    let notice = if st != "正常" {
-        "当前账号不可用，请联系管理员确认配额或有效期。"
-    } else if low {
-        "剩余流量不足 10%，建议提前联系管理员，避免使用中断。"
+    let percent_label = if c.percent.is_some() {
+        format!("已用 {pct}%")
     } else {
-        "一切就绪，安心使用。这里仅展示你当前连接账号的数据。"
+        "无限配额".into()
     };
-    let content = format!(
-        r#"
-<section class="intro"><div><p class="eyebrow">YOUR CONNECTION, AT A GLANCE</p><h1>用量有数，连接有度。</h1><p class="muted">一眼了解流量与有效期，把余下的时间留给生活。</p></div><a class="refresh" href="/" aria-label="刷新流量数据">↻ <span>刷新数据</span></a></section>
-<section class="dashboard {tone}" aria-label="我的流量概览">
-<article class="balance"><div class="card-top"><span>剩余可用流量</span><span class="badge"><i></i>{st}</span></div><div class="balance-value">{remaining}</div><p class="balance-note">每一份余量，都心中有数。</p>
-<div class="progress-label"><span>{progress}</span><span>总配额 {quota}</span></div><div class="track" role="progressbar" aria-label="流量使用比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{pct}"><div style="width:{pct}%"></div></div><div class="usage"><div><span>累计已用</span><strong>{used}</strong></div><div><span>当前账号</span><strong class="account">{email}</strong></div></div><div class="balance-art" aria-hidden="true">≈</div></article>
-<article class="details"><p class="eyebrow">PLAN DETAILS</p><h2>你的连接档案</h2><dl><div><dt>账号状态</dt><dd>{st}</dd></div><div><dt>到期时间</dt><dd>{expiry}</dd></div><div><dt>最近在线</dt><dd>{last}</dd></div></dl><p class="tiny">时间按 {tz} 显示。未激活套餐的有效期从首次使用起计算。</p></article>
+    page(
+        d,
+        &format!(
+            r#"
+<section class="heading"><div><h1>流量概览</h1><p class="account">{email}</p></div><div class="actions"><span class="status {tone}"><i></i>{st}</span><a class="refresh" href="/" aria-label="刷新流量">↻</a></div></section>
+<section class="overview" aria-label="流量数据">
+<article class="balance"><span class="label">剩余流量</span><div class="balance-value">{remaining}</div><div class="progress-label"><span>{percent_label}</span><span>{quota}</span></div><div class="track" role="progressbar" aria-label="流量使用比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{pct}"><div style="width:{pct}%"></div></div></article>
+<div class="metrics"><article><span class="label">已用流量</span><strong>{used}</strong></article><article><span class="label">总配额</span><strong>{quota}</strong></article><article><span class="label"><b class="up">↑</b> 上传</span><strong>{up}</strong></article><article><span class="label"><b class="down">↓</b> 下载</span><strong>{down}</strong></article></div>
 </section>
-<section class="transfer" aria-label="流量明细"><article><span class="direction">↑</span><div><p>累计上传</p><strong>{up}</strong></div><span class="metric-hint">UPLOAD</span></article><article><span class="direction">↓</span><div><p>累计下载</p><strong>{down}</strong></div><span class="metric-hint">DOWNLOAD</span></article></section>
-<aside class="notice {tone}"><span aria-hidden="true">ⓘ</span><div><strong>{notice}</strong><p>面板统计可能延迟数秒到数十秒；点击刷新时，服务端可能复用短时间内的缓存。</p></div></aside>
-<section class="help"><div><p class="eyebrow">JUST FOR YOU</p><h2>简单查询，不多打扰。</h2><p>无需登录、无需订阅。先连接你的节点，再打开此页即可。</p></div><details><summary>切换节点后，怎样查询新账号？</summary><p>关闭当前页面，切换到对应节点后重新打开查询链接。如果客户端复用了旧的代理连接，请断开并重连代理后再试。</p></details><details><summary>流量或有效期有疑问？</summary><p>这里展示的是面板统计，并非实时测速。配额调整、续期和账号状态问题，请联系给你提供节点的管理员。</p></details></section>
-<div class="updated">本次查询时间 {updated} · 面板统计非实时</div>"#,
-        used = human(c.used),
-        email = esc(&t.email),
-        expiry = esc(&expiry_line(t, d, now_ms)),
-        last = fmt_ts(t.last_online, d.tz_offset_hours),
-        tz = tz_label(d.tz_offset_hours),
-        up = human(t.up),
-        down = human(t.down),
-        updated = fmt_ts(now_ms, d.tz_offset_hours)
-    );
-    page(d, &content)
+<section class="plan"><div><span class="label">到期时间 <small>{tz}</small></span><strong>{expiry}</strong></div><div><span class="label">最近在线</span><strong>{last}</strong></div></section>
+<section class="history"><div class="chart-heading"><div><h2>用量记录</h2><p>查询采样 · 累计用量</p></div><div class="legend"><span class="up">● <span>上传</span></span><span class="down">● <span>下载</span></span></div></div>{chart}</section>
+<p class="updated">更新于 {updated}</p>"#,
+            email = esc(&t.email),
+            used = human(c.used),
+            up = human(t.up),
+            down = human(t.down),
+            tz = tz_label(d.tz_offset_hours),
+            last = fmt_ts(t.last_online, d.tz_offset_hours)
+                .chars()
+                .take(16)
+                .collect::<String>(),
+            chart = chart(samples, d),
+            updated = fmt_ts(now_ms, d.tz_offset_hours),
+        ),
+    )
+}
+
+fn chart(samples: &[Sample], d: &DisplayCfg) -> String {
+    if samples.len() < 2 {
+        return r#"<div class="chart-empty">暂无历史记录</div>"#.into();
+    }
+    let first = samples.first().unwrap().at_ms;
+    let last = samples.last().unwrap().at_ms;
+    let span = (last - first).max(1) as f64;
+    let max = samples
+        .iter()
+        .map(|p| p.up.max(p.down))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let mut up = String::new();
+    let mut down = String::new();
+    for (i, p) in samples.iter().enumerate() {
+        let reset = i == 0 || p.up < samples[i - 1].up || p.down < samples[i - 1].down;
+        let command = if reset { 'M' } else { 'L' };
+        let x = (p.at_ms - first) as f64 / span * 704.0;
+        up.push_str(&format!(
+            "{command}{x:.1},{:.1} ",
+            150.0 - p.up as f64 / max as f64 * 150.0
+        ));
+        down.push_str(&format!(
+            "{command}{x:.1},{:.1} ",
+            150.0 - p.down as f64 / max as f64 * 150.0
+        ));
+    }
+    let date = |at| {
+        fmt_ts(at, d.tz_offset_hours)
+            .chars()
+            .skip(5)
+            .take(11)
+            .collect::<String>()
+    };
+    format!(
+        r#"<div class="chart-plot"><div class="y-axis" aria-hidden="true"><span>{max_label}</span><span>{half}</span><span>0</span></div><svg class="chart" viewBox="0 0 704 150" preserveAspectRatio="none" role="img" aria-label="按查询日期记录的累计上传下载流量，计数重置时断开曲线"><g class="grid"><path d="M0 0H704 M0 75H704 M0 150H704"/></g><path class="line up" d="{up}"/><path class="line down" d="{down}"/></svg></div><div class="chart-dates"><span>{start}</span><span>{end}</span></div>"#,
+        max_label = human(max),
+        half = human(max / 2),
+        start = date(first),
+        end = date(last)
+    )
 }
 
 pub fn error(d: &DisplayCfg, code: u16, title: &str, msg: &str) -> String {
     page(
         d,
         &format!(
-            r#"<section class="error-card"><p class="eyebrow">CONNECTION NOTE / {code}</p><div class="error-icon" aria-hidden="true">≈</div><h1>{}</h1><p>{}</p><a href="/" class="refresh">返回首页 · 重新查询</a><p class="tiny">无需输入账号、订阅链接或面板密码。</p></section>"#,
+            r#"<section class="error-card"><p class="eyebrow">{code}</p><div class="error-icon" aria-hidden="true">≈</div><h1>{}</h1><p>{}</p><a href="/" class="error-action">重新查询</a></section>"#,
             esc(title),
             esc(msg)
         ),
@@ -313,7 +374,18 @@ pub fn preview(dir: &std::path::Path) -> anyhow::Result<()> {
     ] {
         std::fs::write(
             dir.join(format!("{name}.html")),
-            html(&t, &DisplayCfg::default(), now),
+            if name == "pending" {
+                html(&t, &DisplayCfg::default(), now)
+            } else {
+                let samples: Vec<_> = (0..14)
+                    .map(|i| Sample {
+                        at_ms: now - (13 - i) * DAY_MS,
+                        up: (t.up as f64 * (i + 1) as f64 / 14.0) as i64,
+                        down: (t.down as f64 * ((i + 1) as f64 / 14.0).powf(1.3)) as i64,
+                    })
+                    .collect();
+                html_with_history(&t, &DisplayCfg::default(), now, &samples)
+            },
         )?;
     }
     for (code, title, msg) in [
@@ -344,6 +416,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn chart_uses_real_time_spacing_and_breaks_at_counter_reset() {
+        let d = DisplayCfg::default();
+        assert!(chart(&[], &d).contains("暂无历史记录"));
+        let points = [
+            Sample {
+                at_ms: 1000,
+                up: 10,
+                down: 20,
+            },
+            Sample {
+                at_ms: 2000,
+                up: 20,
+                down: 40,
+            },
+            Sample {
+                at_ms: 5000,
+                up: 1,
+                down: 2,
+            },
+        ];
+        let html = chart(&points, &d);
+        assert!(html.contains("M0.0,112.5 L176.0,75.0 M704.0,146.2"));
+        assert!(html.contains("查询日期") && !html.contains("NaN"));
+        let zeros = [
+            Sample {
+                at_ms: 1000,
+                up: 0,
+                down: 0,
+            },
+            Sample {
+                at_ms: 2000,
+                up: 0,
+                down: 0,
+            },
+        ];
+        assert!(!chart(&zeros, &d).contains("NaN"));
+    }
+    #[test]
+    fn success_page_has_metrics_without_marketing_or_faq() {
+        let html = html(&sample(), &DisplayCfg::default(), 1000);
+        for label in ["剩余流量", "上传", "下载", "总配额", "到期时间", "用量记录"]
+        {
+            assert!(html.contains(label));
+        }
+        assert!(
+            !html.contains("<details>") && !html.contains("用量有数") && !html.contains("<script")
+        );
+    }
     #[test]
     fn human_sizes() {
         assert_eq!(human(0), "0 B");

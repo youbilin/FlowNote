@@ -1,4 +1,5 @@
 mod config;
+mod history;
 mod logtail;
 mod panel;
 mod proxy_proto;
@@ -37,6 +38,7 @@ struct Ctx {
     cfg: Config,
     index: Arc<Index>,
     panel: PanelClient,
+    history: Arc<history::History>,
     tls: TlsAcceptor,
 }
 
@@ -48,6 +50,10 @@ async fn main() -> Result<()> {
         )
         .init();
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.as_slice() == ["--version"] {
+        println!("flownote {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if args.first().is_some_and(|v| v == "--preview") {
         let dir = args.get(1).context("用法：flownote --preview 输出目录")?;
         return render::preview(std::path::Path::new(dir));
@@ -61,7 +67,7 @@ async fn main() -> Result<()> {
     let panel = PanelClient::new(&cfg.panel, cfg.resolve_token()?)?;
     if args.get(1).is_some_and(|v| v == "--check-panel") && args.len() == 3 {
         let t = panel.traffic(&args[2]).await?;
-        println!("{}", render::text(&t, &cfg.display, now_ms()));
+        println!("{}", render::text(&t.traffic, &cfg.display, now_ms()));
         return Ok(());
     }
     if args.len() > 1 {
@@ -77,7 +83,9 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(cfg.server.listen).await?;
     info!(listen = %cfg.server.listen, domain = %cfg.server.domain, "FlowNote v0.3 已启动（PROXY → TLS → HTTP）");
     let sem = Arc::new(Semaphore::new(cfg.server.max_conns));
+    let history = Arc::new(history::History::new(cfg.history.clone()));
     let ctx = Arc::new(Ctx {
+        history,
         cfg,
         index,
         panel,
@@ -222,7 +230,7 @@ fn error(
         Fmt::Text => reply(
             status,
             "text/plain; charset=utf-8",
-            format!("{title}?{msg}\n"),
+            format!("{title}: {msg}\n"),
         ),
     }
 }
@@ -284,7 +292,13 @@ async fn handle(
         );
     }
     let Some(email) = email.as_ref() else {
-        return error(&fmt, StatusCode::FORBIDDEN, "还没识别到你的节点", "请先连接管理员提供的节点，再重新打开此页面。仍无法查询时，请联系管理员检查入口分流和账号识别。", &ctx.cfg);
+        return error(
+            &fmt,
+            StatusCode::FORBIDDEN,
+            "还没识别到你的节点",
+            "请连接你的节点后重试。",
+            &ctx.cfg,
+        );
     };
     let t = match ctx.panel.traffic(email).await {
         Ok(t) => t,
@@ -294,22 +308,36 @@ async fn handle(
                 &fmt,
                 StatusCode::BAD_GATEWAY,
                 "数据暂时没送达",
-                "流量服务暂时无法连接，请稍后刷新。持续出现时请联系管理员。",
+                "暂时无法获取流量，请稍后刷新。",
                 &ctx.cfg,
             );
         }
     };
     let now = now_ms();
+    let store = ctx.history.clone();
+    let snapshot = t.clone();
+    let samples = match tokio::task::spawn_blocking(move || store.sample(&snapshot)).await {
+        Ok(Ok(samples)) => samples,
+        _ => {
+            warn!("History unavailable; current traffic remains available");
+            Vec::new()
+        }
+    };
+    let t = t.traffic;
     match fmt {
         Fmt::Json => reply(
             StatusCode::OK,
             "application/json; charset=utf-8",
-            render::json(&t, now),
+            if samples.is_empty() {
+                render::json(&t, now)
+            } else {
+                render::json_with_history(&t, now, &samples)
+            },
         ),
         Fmt::Html => reply(
             StatusCode::OK,
             "text/html; charset=utf-8",
-            render::html(&t, &ctx.cfg.display, now),
+            render::html_with_history(&t, &ctx.cfg.display, now, &samples),
         ),
         Fmt::Text => reply(
             StatusCode::OK,

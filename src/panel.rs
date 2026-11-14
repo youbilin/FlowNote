@@ -45,12 +45,18 @@ struct Envelope {
     obj: Option<ClientTraffic>,
 }
 
+#[derive(Clone)]
+pub struct Snapshot {
+    pub traffic: ClientTraffic,
+    pub observed_at_ms: i64,
+}
+
 pub struct PanelClient {
     http: Client,
     base: Url,
     token: String,
     ttl: Duration,
-    cache: Mutex<HashMap<String, (Instant, ClientTraffic)>>,
+    cache: Mutex<HashMap<String, (Instant, Snapshot)>>,
 }
 
 impl PanelClient {
@@ -72,7 +78,7 @@ impl PanelClient {
         })
     }
 
-    pub async fn traffic(&self, email: &str) -> Result<ClientTraffic> {
+    pub async fn traffic(&self, email: &str) -> Result<Snapshot> {
         let mut cache = self.cache.lock().await;
         if let Some((at, v)) = cache.get(email) {
             if at.elapsed() < self.ttl {
@@ -129,8 +135,12 @@ impl PanelClient {
                 cache.clear();
             }
         }
-        cache.insert(email.to_string(), (Instant::now(), t.clone()));
-        Ok(t)
+        let snapshot = Snapshot {
+            traffic: t,
+            observed_at_ms: crate::now_ms(),
+        };
+        cache.insert(email.to_string(), (Instant::now(), snapshot.clone()));
+        Ok(snapshot)
     }
 }
 

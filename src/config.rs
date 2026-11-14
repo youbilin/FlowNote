@@ -11,6 +11,8 @@ pub struct Config {
     pub panel: PanelCfg,
     #[serde(default)]
     pub display: DisplayCfg,
+    #[serde(default)]
+    pub history: HistoryCfg,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -70,6 +72,24 @@ impl Default for DisplayCfg {
         }
     }
 }
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HistoryCfg {
+    pub enabled: bool,
+    pub directory: PathBuf,
+    pub retention_days: u32,
+    pub sample_interval_secs: u64,
+}
+impl Default for HistoryCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: "/var/lib/flownote/history".into(),
+            retention_days: 30,
+            sample_interval_secs: 3600,
+        }
+    }
+}
 fn d_listen() -> SocketAddr {
     "127.0.0.1:8686".parse().unwrap()
 }
@@ -109,6 +129,12 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         if !self.server.listen.ip().is_loopback() {
             bail!("server.listen 必须为回环地址，不能暴露公网或内网");
+        }
+        if !(1..=90).contains(&self.history.retention_days)
+            || !(300..=86400).contains(&self.history.sample_interval_secs)
+            || (self.history.enabled && !self.history.directory.is_absolute())
+        {
+            bail!("history requires an absolute directory, retention_days 1..=90 and sample_interval_secs 300..=86400");
         }
         let d = &self.server.domain;
         if d.len() > 253
@@ -227,6 +253,26 @@ mod tests {
             c.panel.base_url = url.into();
             c.validate().unwrap();
         }
+    }
+    #[test]
+    fn legacy_config_disables_history_and_history_limits_are_checked() {
+        let raw = include_str!("../deploy/config.example.toml")
+            .split("[history]")
+            .next()
+            .unwrap();
+        let c: Config = toml::from_str(raw).unwrap();
+        assert!(!c.history.enabled);
+        for days in [0, 91] {
+            let mut c = sample();
+            c.history.retention_days = days;
+            assert!(c.validate().is_err());
+        }
+        let mut c = sample();
+        c.history.directory = "relative".into();
+        assert!(c.validate().is_err());
+        let mut c = sample();
+        c.history.sample_interval_secs = 1;
+        assert!(c.validate().is_err());
     }
     #[test]
     fn rejects_legacy_debug_override() {

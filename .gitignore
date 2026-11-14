@@ -15,3 +15,6 @@ __pycache__/
 *.py[cod]
 .DS_Store
 Thumbs.db
+
+# Optional query samples must never be published
+/history/

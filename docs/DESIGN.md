@@ -1,4 +1,4 @@
-# 流量笺 · FlowNote v0.3 设计
+# 流量笺 · FlowNote v0.3.1 设计
 
 ## 1. 范围与名称
 
@@ -41,6 +41,7 @@ FlowNote，中文「流量笺」：用一张轻量的手记，把流量余量和
 | tls | PEM 证书完整链与私钥加载，安全默认协议，HTTP/1.1 ALPN |
 | logtail | 只读查询出站日志，首次从末尾开始，处理 inode 轮转/截断/半行；最大 16384 索引键，TTL 默认 600 秒 |
 | panel | 按 email 缓存，默认 5 秒；异步互斥串行回源，避免同一账号并发击穿（代价：不同账号也排队）；最多 2048 项，64 KiB 响应体 |
+| history | 可选查询采样；账号哈希文件名；默认 30 天 / 1 小时、最多 1024 个账号、每账号 4096 点 / 512 KiB 读取；权限 0700 / 0600、原子替换，写入失败不阻断当前查询 |
 | render + ui | 转义动态文本，饱和加法避免流量溢出，无限/未激活语义，正常和错误页共用模板 |
 | main | 默认 128 并发连接；PROXY 3 秒、TLS 5 秒、HTTP 头 10 秒、整体 30 秒；HTTP 读缓冲 16 KiB |
 
@@ -52,9 +53,9 @@ FlowNote，中文「流量笺」：用一张轻量的手记，把流量余量和
 
 只支持 GET / HEAD；路径 `/`、`/json`；可选唯一 format 参数 `html|text|json`。浏览器 Accept 返回 HTML，curl 默认文本，`/json` 固定 JSON。拒绝任意账号参数和其它路径。错误按相同协商格式返回；HEAD 空正文；响应不含 UUID、subId、token。
 
-JSON 是最小只读投影：email 标签、enable/status、up/down/used/total/remaining/percent_used、expiry_time_ms、last_online_ms、generated_at_ms。email 可能本身是个人邮箱，因此建议管理员使用无个人信息的 client 标签；本版没有“账号脱敏即绝对匿名”的承诺。
+JSON 是最小只读投影：email 标签、enable/status、up/down/used/total/remaining/percent_used、expiry_time_ms、last_online_ms、generated_at_ms，以及 history / history_kind。history 的每条记录仅含 at_ms、up、down，口径固定为 query_samples_cumulative_bytes。email 可能本身是个人邮箱，因此建议管理员使用无个人信息的 client 标签；本版没有“账号脱敏即绝对匿名”的承诺。
 
-[UI.md](UI.md) 规定视觉、信息层级、移动端和状态矩阵。无 JS、无持久化存储、无图片资源，减少攻击面并避免共享节点流量加载第三方资源。低流量警告只在用户打开页面时显示，不是自动提醒功能。
+[UI.md](UI.md) 规定视觉、信息层级、移动端和状态矩阵。无 JS、无浏览器持久化存储、无外部图片资源，减少攻击面并避免共享节点流量加载第三方资源。低流量仅改变页面状态色，不做自动提醒；成功页面只展示数字、状态和采样曲线。
 
 ## 6. 验证与发布门槛
 
@@ -64,4 +65,12 @@ JSON 是最小只读投影：email 标签、enable/status、up/down/used/total/r
 
 ## 7. 迁移与交付
 
-旧 v0.1 压缩包不覆盖；保留用于回溯。新压缩包仅包含源码、Cargo.lock、部署示例和文档，不含 token、证书私钥、编译缓存或真实日志。仓库 README 提供项目概览，部署步骤集中在 DEPLOYMENT.md；发布记录见 CHANGELOG。
+旧 v0.1 压缩包不覆盖；保留用于回溯。0.3.1 发布包包含对应架构的静态 musl 二进制、部署示例、安装说明与许可证，不含 Token、私钥、真实日志或历史记录。源码仓库另含 Cargo.lock。仓库 README 提供项目概览，部署步骤集中在 DEPLOYMENT.md；发布记录见 CHANGELOG。
+
+## 8. 查询采样与发布
+
+面板成功返回时记录观察时间，缓存保留该时间。每次有效查询由阻塞工作线程按账号读取自己的采样文件；小时采样默认值、时间窗口裁剪与点数上限控制增长。检测到计数下降时追加重置点；渲染器断开折线。并发响应到达存储层可能乱序，旧快照不得覆盖更新记录。缓存命中不制造额外点。
+
+历史文件只含 timestamp / up / down，不含 Token 或原始账号字段；账号标签的 SHA-256 仅用于命名，不视为加密或不可关联性。持久化采用独占临时文件、0600、fsync 后原子 rename；读取校验文件类型、大小、序列顺序与非负计数。默认路径受 systemd StateDirectory 管理。过期清理按查询触发，没有后台定时任务，保留时间与删除办法见部署指南。
+
+GitHub Actions 使用原生 amd64 / arm64 Linux runner 分别编译 musl 包，完成单元、TLS/PROXY、安装脚本与二进制版本检查后，汇总两个包及 SHA256SUMS，全部齐备才发布。Actions 使用固定提交引用；发布权限只授予最终发布任务。脚本固定版本并验证 HTTPS 下载、清单唯一条目、包内路径、文件类型和版本；SHA-256 清单不代替独立签名。首次安装等待管理员配置，升级保留配置和旧二进制。

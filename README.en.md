@@ -10,7 +10,7 @@ A lightweight HTTPS traffic dashboard for people sharing a 3x-ui server through 
 No panel subscription service or end-user login required.
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.0-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.1-246852)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [简体中文](README.md) · **English**
@@ -42,13 +42,26 @@ No panel subscription service or end-user login required.
 
 ## Get started
 
+On a Linux amd64 / arm64 host with systemd, install the prebuilt static musl package without a Rust toolchain:
+
 ```bash
-git clone https://github.com/youbilin/FlowNote.git
-cd FlowNote
-cargo build --release --locked
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.1/install.sh | sudo bash -s -- --version v0.3.1
 ```
 
-A Rust toolchain and C build tools are required. There are currently no prebuilt binaries or one-line remote installers.
+The installer selects the native architecture, verifies the release checksum, archive layout and binary version, and installs the service account and systemd unit. Existing configuration, tokens and certificates are preserved. A new service waits for configuration before its first start; an active service is restarted on upgrade, with a previous binary retained for rollback.
+
+To inspect the script first or download an offline package:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.1/install.sh
+less install.sh
+sudo bash install.sh --version v0.3.1
+# Download and verify without installing:
+bash install.sh --download-only ./flownote-download
+```
+
+[Release packages and SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.1). Checksums detect corruption and are not independent signatures. Source builds remain available with `cargo build --release --locked`.
+
 
 Follow the [deployment guide](docs/DEPLOYMENT.md) to create a dedicated service user, install certificates and token files, and configure [`config.example.toml`](deploy/config.example.toml), the [Xray routing snippet](deploy/xray-snippet.json), and the [systemd unit](deploy/flownote.service). The detailed deployment guide is currently in Chinese.
 
@@ -114,10 +127,14 @@ cargo build --locked
 python3 tests/e2e.py target/debug/flownote
 ```
 
-Local validation: **28 unit tests and 30 TLS / PROXY integration checks passed**. Integration tests use a temporary local certificate and simulated panel/logs; they do not constitute real Xray verification. See [test notes](docs/TESTING.md), [architecture](docs/DESIGN.md), and [UI design](docs/UI.md).
+Local validation: **33 unit tests, 35 TLS / PROXY integration checks, and 8 offline installer test groups passed**. Integration tests use a temporary local certificate and simulated panel/logs; they do not constitute real Xray verification. See [test notes](docs/TESTING.md), [architecture](docs/DESIGN.md), and [UI design](docs/UI.md).
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and report potential data exposure privately using [SECURITY.md](SECURITY.md). Never post real API tokens, access logs, or user traffic records.
 
 ## License
 
 [MIT](LICENSE) © 2026 You Bilin. An independent project, not affiliated with 3x-ui or Xray.
+
+## Query history
+
+The compact dashboard shows remaining traffic, used traffic, uploads, downloads, quota, expiry and status. Optional server-side history stores actual cumulative counters observed during user queries and renders an inline SVG curve. It does not reconstruct past usage or provide precise daily billing. New installation templates enable 30-day retention with hourly sampling; legacy configurations keep history disabled. Cache hits reuse the original fetch timestamp, and counter resets break the curve. Account files use SHA-256 names with restricted filesystem permissions; they are not encrypted. See [history and deletion](docs/DEPLOYMENT.md#历史曲线与数据保留).

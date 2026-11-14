@@ -80,6 +80,9 @@ lookup_timeout_ms = 300
 [panel]
 base_url = "http://127.0.0.1:{panel.server_port}/base"
 token = "fixture-only"
+[history]
+enabled = true
+directory = "{root / "history"}"
 ''')
         proc = subprocess.Popen([str(binary), str(cfg)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
@@ -138,12 +141,24 @@ token = "fixture-only"
             check("no secret projection", "uuid" not in body and "subId" not in body and "DO_NOT_LEAK" not in body)
             check("security headers", all(v in headers.lower() for v in ["no-store", "strict-transport-security", "content-security-policy", "no-referrer", "nosniff"]))
             check("PROXY v1 compatibility", request("bob", version=1)[0] == 200)
+            alice = json.loads(request()[2])
+            check("history uses actual cumulative counters", alice["history"] == [{"at_ms": alice["history"][0]["at_ms"], "up": 1000, "down": 2000}])
+            check("cached snapshots do not add samples", len(alice["history"]) == 1)
+            bob = json.loads(request("bob")[2])
+            check("history isolated per account", len(bob["history"]) == 1 and bob["email"] == "bob")
+            import hashlib
+            history_path = root / "history" / (hashlib.sha256(b"alice").hexdigest() + ".json")
+            check("history persists without raw account filenames", json.loads(history_path.read_text()) == alice["history"] and not (root / "history" / "alice.json").exists())
+            history_path.write_text("corrupt")
+            res = request()
+            check("history failure preserves live query", res[0] == 200 and json.loads(res[2])["used"] == 3000 and json.loads(res[2])["history"] == [])
+            history_path.write_text(json.dumps(alice["history"]))
             check("delayed log association", request("late", delay=.1)[0] == 200)
             check("unknown identity denied", request(log_enabled=False)[0] == 403)
             check("other outbound ignored", request("outsider", tag="direct")[0] == 403)
             check("spoofed account parameter rejected", request(path="/json?email=bob")[0] == 400)
             check("forwarded headers cannot select identity", json.loads(request(extra="X-Forwarded-For: 1.2.3.4\r\nX-User: bob\r\n")[2])["email"] == "alice")
-            check("HTML UI", "用量有数" in request(path="/")[2])
+            check("HTML UI", "剩余流量" in request(path="/")[2])
             check("text negotiation", "已用:" in request(path="/?format=text")[2])
             head = request(method="HEAD")
             check("HEAD has no body", head[0] == 200 and head[2] == "")

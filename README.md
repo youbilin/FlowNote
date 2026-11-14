@@ -9,7 +9,7 @@
 面向 3x-ui 拼节点用户的轻量流量查询页。无需开启面板订阅，无需用户登录。
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.0-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.1-246852)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust&logoColor=white)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -48,13 +48,15 @@ FlowNote 提供一张只读的流量手记：用户先连接管理员分配的�
 </table>
 </details>
 
-*截图使用合成账号和流量数据。查询页没有第三方资源；GitHub 文档中的徽章由 GitHub / Shields.io 提供。*
+*截图和日期曲线使用合成账号与流量数据；实际曲线从启用采样后逐步积累。查询页没有第三方资源；GitHub 文档中的徽章由 GitHub / Shields.io 提供。*
 
 ## 功能一览
 
 | 能力 | 说明 |
 | --- | --- |
 | 看清余量 | 剩余、已用、总配额、上传、下载，以及直观的用量进度 |
+| 日期曲线 | 可选保存查询时的累计上传 / 下载，按实际时间绘制；不回填历史、不冒充每日账单 |
+| 便捷安装 | Linux amd64 / arm64 静态安装包、校验清单和安装脚本；首次启动前配置域名与面板 |
 | 看清有效期 | 到期时间、时区、最近在线；正确区分无限套餐与首次使用计时 |
 | 状态有反馈 | 正常、低流量、用尽、过期、停用及友好错误页 |
 | HTTPS 入口 | 自有域名与证书，原生 TLS，核对 SNI / Host |
@@ -73,7 +75,30 @@ FlowNote 提供一张只读的流量手记：用户先连接管理员分配的�
 - **域名证书**：准备自有查询子域名及有效证书，建议使用 DNS-01 续期，不套 CDN。
 - **来源可关联**：查询域名经过对应节点，开启 access log，禁用该场景的 Mux，并完成双账号实测。
 
-### 1. 获取并构建
+### 1. 安装（Linux amd64 / arm64）
+
+在有 systemd 的服务器上执行，安装时自动识别架构，无需 Rust：
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.1/install.sh | sudo bash -s -- --version v0.3.1
+```
+
+脚本从固定版本 Release 下载静态 musl 包，核对 SHA-256、包内路径与二进制版本，创建服务用户并安装 systemd 单元。**已有配置、Token 和证书会保留；首次安装完成后仍需填写下面的接入配置。** 已运行的服务会在升级时重启，旧二进制留作回退。
+
+希望先审阅脚本，或只下载离线安装包：
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.1/install.sh
+less install.sh
+sudo bash install.sh --version v0.3.1
+# 仅下载并校验，不修改系统：
+bash install.sh --version v0.3.1 --download-only ./flownote-download
+```
+
+[预编译包与 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.1) · [安装与升级细节](docs/DEPLOYMENT.md#安装包与安装脚本)
+
+<details>
+<summary>从源码构建</summary>
 
 ```bash
 git clone https://github.com/youbilin/FlowNote.git
@@ -81,7 +106,9 @@ cd FlowNote
 cargo build --release --locked
 ```
 
-需要 Rust 工具链与 C 编译工具。当前通过 Linux 本地构建；没有预编译安装包或一键远程安装脚本。
+需要 Rust 工具链和 C 编译工具；服务配置见部署指南。
+
+</details>
 
 ### 2. 配置与接入
 
@@ -159,7 +186,7 @@ cargo build --locked
 python3 tests/e2e.py target/debug/flownote
 ```
 
-本地记录：**28 个单元测试、30 项 TLS / PROXY 集成检查通过**；Playwright 检查桌面、手机、深色与错误状态。集成测试使用本机临时证书、模拟面板与日志，不替代真实 3x-ui / Xray 验收。CI 状态以页首的实际运行结果为准。
+本地记录：**33 个单元测试、35 项 TLS / PROXY 集成检查、8 组安装脚本检查通过**；Playwright 检查桌面、手机、深色与错误状态。集成测试使用本机临时证书、模拟面板与日志，不替代真实 3x-ui / Xray 验收。CI 状态以页首的实际运行结果为准。
 
 欢迎提交可复现的问题、文档改进与小范围修复。开始前请阅读[贡献指南](CONTRIBUTING.md)；涉及身份关联或数据泄露的问题，请按[安全报告指引](SECURITY.md)私下报告，不要公开上传真实 token、访问日志或用户数据。
 

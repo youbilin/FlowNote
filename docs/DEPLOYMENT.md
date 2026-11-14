@@ -2,7 +2,7 @@
 
 **给拼节点的普通用户，一张清晰、私密的流量手记。**
 
-v0.3.0：连接自己的节点 → 打开 `https://traffic.你的域名/` → 查看当前账号的剩余流量、上传下载、配额和有效期。**不需要开启 3x-ui 面板订阅功能，也不需要用户登录或填写账号。**
+v0.3.1：连接自己的节点 → 打开 `https://traffic.你的域名/` → 查看当前账号的剩余流量、上传下载、配额和有效期。**不需要开启 3x-ui 面板订阅功能，也不需要用户登录或填写账号。**
 
 项目原名 `xui-traffic-probe`；二进制现为 `flownote`。跳过 v0.2，不规划 v0.4。单 VPS 查询，不做管理后台、订阅服务、多机汇总或提醒系统。
 
@@ -11,7 +11,7 @@ v0.3.0：连接自己的节点 → 打开 `https://traffic.你的域名/` → �
 ## 查询界面
 
 - 剩余流量主卡、已用比例、账号状态、有效期与最近在线。
-- 手机 / 桌面自适应、系统深色模式、低流量 / 到期 / 停用提示和友好错误页。
+- 手机 / 桌面自适应、系统深色模式、低流量 / 到期 / 停用状态和友好错误页。
 - 服务端渲染，无 JS、无远程字体、无第三方图片或统计脚本；刷新遵循短期缓存。
 - 同时保留文本、JSON；不会返回 UUID、subId 或面板 token。
 - [UI 设计说明](UI.md) · [架构与安全边界](DESIGN.md) · [更新记录](../CHANGELOG.md) · [本地测试记录](TESTING.md)
@@ -41,6 +41,49 @@ TLS 在 FlowNote 自身终止，不加会破坏来源关联的普通 HTTP 反向
 3. 一个你拥有的独立查询域名和有效的公开信任证书。下文 `traffic.example.com` 仅为占位符，不能直接用于生产。
 4. 查询域名走指定节点，禁用此场景下的 Mux；Xray access log 开启，且该连接记录有唯一的 client email 标签。
 
+## 安装包与安装脚本
+
+支持 Linux amd64 / arm64，发布包使用静态 musl 二进制，不依赖目标机器安装 Rust。标准安装要求 systemd、Bash、curl、tar、sha256sum 和常用系统管理工具。其余系统可使用 `--download-only` 获取并校验安装包，再按自己的服务管理方式部署。
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.1/install.sh
+# 建议先审阅脚本
+less install.sh
+sudo bash install.sh --version v0.3.1
+```
+
+一行安装命令见 README。脚本安装程序与服务单元，保留已有 `config.toml`、Token 和证书，另写 `config.example.toml` 供迁移对照，路由片段与安装说明放在 `/usr/local/share/flownote/`。首次安装不启动占位配置，也不修改现有 Xray、DNS 或 ACME 客户端；继续完成下面的域名、证书、权限与路由配置。
+
+离线获取：`bash install.sh --version v0.3.1 --download-only ./flownote-download`。也可直接从同版 Release 下载 `flownote-v0.3.1-linux-amd64.tar.gz` 或 `flownote-v0.3.1-linux-arm64.tar.gz` 与 `SHA256SUMS`，在下载目录执行 `sha256sum --ignore-missing --check SHA256SUMS`。检查对应文件确实显示 OK，然后解压。校验清单与安装包来自同一发布渠道，用于发现损坏，不是独立签名。
+
+升级继续执行指定版本的安装命令。活动服务会短暂重启；上一个二进制保存为 `/usr/local/bin/flownote.previous`。脚本在新进程很快退出时尝试恢复旧二进制，但不能代替升级后实际查询验收。手动回退：
+
+```bash
+sudo install -m 755 /usr/local/bin/flownote.previous /usr/local/bin/flownote.rollback
+sudo mv /usr/local/bin/flownote.rollback /usr/local/bin/flownote
+sudo systemctl restart flownote
+```
+
+旧版本程序可能不认识新增配置字段；若从 0.3.1 回退到 0.3.0，先移除新增的 `[history]` 配置段。请自行保留配置备份。
+
+## 历史曲线与数据保留
+
+3x-ui 的此查询接口提供累计计数，没有过去每天的账单。FlowNote 仅在已识别用户查询时采样，横轴使用面板请求成功时的真实时间，缓存命中沿用原时间。默认最多每小时新增一个点；检测到上传或下载累计值下降时立即记点，并在曲线中断开，避免把重置前后误连。只有不足两个点时显示「暂无历史记录」。不做后台全账号轮询，不补造过去，不计算精确每日用量。
+
+```toml
+[history]
+enabled = true
+directory = "/var/lib/flownote/history"
+retention_days = 30
+sample_interval_secs = 3600
+```
+
+新安装模板开启；缺少此段的旧配置保持关闭。保留窗口允许 1–90 天，采样间隔允许 300–86400 秒，单账号最多 4096 个点、单文件读取上限 512 KiB，最多 1024 个账号文件。点数上限可能让高频采样的实际保留时间短于设定天数。当前账号在查询时裁剪过期记录；创建新账号文件时清理其它过期账号文件，没有后台定时删除任务，长期没有相应查询时文件可能继续留在磁盘。
+
+历史文件以账号标签的 SHA-256 命名，正文只含时间及累计上传 / 下载。哈希文件名不等于加密或匿名；目录 0700、文件 0600，由 `flownote` 读取。systemd 通过 `StateDirectory=flownote` 允许写入默认状态目录；自定义路径需另外配置写权限。历史读取、写入或容量异常时仍显示实时查询结果，历史部分为空，日志仅记录通用错误。
+
+关闭采样设 `enabled = false` 后重启；不会自动删除旧文件。彻底清除：先停止服务，确认目标确为 `/var/lib/flownote/history` 且没有需要保留的数据后，删除该目录，再按需启动。备份历史文件应按用户数据保护。
+
 ## 部署
 
 ### 1. 域名与证书
@@ -50,7 +93,7 @@ TLS 在 FlowNote 自身终止，不加会破坏来源关联的普通 HTTP 反向
 用你已有的 ACME 客户端通过 **DNS-01** 申请该域名证书；服务不自动申请或续期证书。DNS-01 无需为查询功能开放 80 / 443，DNS API 凭据仅交给 ACME 客户端，限制权限。
 
 ```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin flownote
+getent passwd flownote >/dev/null || sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin flownote
 sudo install -d -o root -g flownote -m 750 /etc/flownote /etc/flownote/tls
 # 将 YOUR_* 换成 ACME 客户端实际生成的证书完整链与私钥路径
 sudo install -o root -g flownote -m 640 YOUR_FULLCHAIN_PEM /etc/flownote/tls/fullchain.pem
@@ -71,12 +114,14 @@ sudoedit /etc/flownote/token
 
 程序优先读取 `XUI_API_TOKEN`，其次 `panel.token_file`，最后 `panel.token`。建议 token 文件，不要提交密钥。面板在本机时用回环 HTTP；跨主机必须用证书正常验证的 HTTPS，不提供 `accept_invalid_certs` 开关。
 
-### 3. 编译和配置
+### 3. 程序和配置
+
+使用安装脚本时，跳过下方构建和复制命令，直接编辑已安装的配置。从源码部署时：
 
 ```bash
 cargo build --release --locked
 sudo install -m 755 target/release/flownote /usr/local/bin/flownote
-sudo install -o root -g flownote -m 640 deploy/config.example.toml /etc/flownote/config.toml
+test -e /etc/flownote/config.toml || sudo install -o root -g flownote -m 640 deploy/config.example.toml /etc/flownote/config.toml
 sudoedit /etc/flownote/config.toml
 sudo install -m 644 deploy/flownote.service /etc/systemd/system/flownote.service
 ```
