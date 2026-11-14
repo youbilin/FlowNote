@@ -8,6 +8,16 @@
 - `python3 tests/setup_xray.py /实际测试内核路径`：5 组真实 Xray 检查通过，复现默认日志目录不存在时的旧错误、验证临时日志预检和准备正式日志后的完整检查、确认其他配置错误仍被拒绝及诊断文件私有。
 - 真实内核检查使用隔离的临时配置与文件，未启动代理监听、修改面板数据库或执行用户 VPS 上的服务操作。安装向导的 systemd / SQLite 应用与回退通过模拟回归验证；目标服务器仍需真实双账号验收。
 
+
+## v0.3.5 公开发布验证
+
+[CI](https://github.com/youbilin/FlowNote/actions/runs/43609131863) 与 [Release](https://github.com/youbilin/FlowNote/actions/runs/43609153525) 均通过，原生 amd64 / arm64 安装包已公开。
+
+- 重新下载两架构归档、install.sh 和 SHA256SUMS，所有摘要匹配；readelf 确认架构正确、无动态解释器。
+- 下载的 amd64 二进制报告 0.3.5，通过 37 项 HTTP 与 39 项 HTTPS / PROXY 集成检查。
+- 直接对包内 setup.py 运行全部 56 组向导回归与 5 组真实 Xray 回归，通过；进入实际 PTY 卸载子菜单并取消，通过，未执行主机配置或删除操作。
+- 实际公开安装脚本的 --download-only 下载与校验通过。README 与包内说明已更新；未连接用户服务器执行升级或配置。
+
 ---
 
 # v0.3.4 验证记录
