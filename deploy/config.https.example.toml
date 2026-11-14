@@ -26,9 +26,9 @@ timeout_secs = 5
 title = "流量笺"
 tz_offset_hours = 8
 
-# 查询时记录累计值；不回填过去，也不是每日精确账单。
+# 默认关闭历史曲线，减少磁盘读写；按需改为 true，仅在查询时采样。
 [history]
-enabled = true
+enabled = false
 directory = "/var/lib/flownote/history"
 retention_days = 30
 sample_interval_secs = 3600

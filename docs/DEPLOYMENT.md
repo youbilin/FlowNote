@@ -1,16 +1,16 @@
-# FlowNote v0.3.4 部署指南
+# FlowNote v0.3.6 部署指南
 
 默认方案为 **`http://6.6.6.6/`**。从安装、面板 Token、访问日志权限到 Xray / 客户端分流的完整操作步骤均放在 [README 快速开始](../README.md#快速开始)，按顺序完成即可。无需域名、DNS、证书或面板订阅。6.6.6.6 是真实公网 IP，仅作为本地路由约定，必须在代理链路内截获。
 
 ## 本机交互式配置（推荐）
 
-按官方脚本安装 3x-ui 后，运行 README 中带 `--setup` 的安装命令；已经升级到 v0.3.4 的用户执行 `sudo flownote-setup`。选择 `2`，确认检测出的面板地址、日志路径，输入不回显的 API Token 和真实 client email。向导需要 Python 3，仅使用标准库。成功后只需继续 README 的客户端规则和真实双账号验收。
+按官方脚本安装 3x-ui 后，运行 README 中带 `--setup` 的安装命令；已经安装的用户执行 `sudo flownote-setup`。选择 `2`，粘贴不回显的 API Token 并确认。面板地址、运行日志、验证用客户端自动选择；需要覆盖时加 `--advanced`。向导需要 Python 3，仅使用标准库。成功后只需继续 README 的客户端规则和真实双账号验收。
 
 默认检测 `/usr/local/x-ui`、`/etc/x-ui/x-ui.db` 和 `bin/xray-linux-*`，面板端口 / webBasePath 从设置读取；HTTPS 面板不降级或跳过验证。`--detect` 只读，`--xui-dir` / `--db` / `--core` 支持显式路径。自动应用要求运行中的本机 systemd `x-ui`、SQLite 及相同网络命名空间；非标准部署使用手动配置。
 
-若没有持久化 `xrayTemplateConfig`，在面板 Xray 设置页保存一次现有配置再运行。确认前会生成 root 私有预览并运行内核 `run -test`；确认后在面板接口验证成功的前提下短暂停止 x-ui，备份数据库，事务更新单个模板设置，恢复 x-ui 并启动 FlowNote。流量统计不被整库替换。备份在 `/var/backups/flownote/`，包含敏感信息。失败时尝试恢复模板与原配置；日志 / ACL / 轮转文件可能保留。
+若没有持久化 `xrayTemplateConfig`，在面板 Xray 设置页保存一次现有配置再运行。确认前会生成 root 私有预览并运行内核 `run -test`；确认后在面板接口验证成功的前提下短暂停止 x-ui，备份数据库，事务更新单个模板设置，恢复 x-ui 并启动 FlowNote。流量统计不被整库替换。备份在 `/var/backups/flownote/`，包含敏感信息。失败时尝试恢复模板与原配置；已安装的系统包、日志 / ACL / 轮转文件可能保留。
 
-向导会用生成的 HTTP / 历史采样配置替换已有 FlowNote 自定义配置（先备份），并关闭 Xray 日志地址掩码以保留来源 IP:端口。默认日志 `/var/log/flownote-xray/access.log` 使用专用组权限，生成每日七次保留的 logrotate 配置；需要系统安装 `logrotate`。使用已有日志时，文件需存在；无法读取时需要 `acl` 工具，轮转后的读取权限由管理员保留。日志勿放 `/root` 或 `/home`。
+向导会用生成的 HTTP 轻量配置（历史关闭）替换已有 FlowNote 自定义配置（先备份），并关闭 Xray 日志地址掩码以保留来源 IP:端口。优先复用实际运行日志；没有日志时使用专用组权限的 `/var/log/flownote-xray/access.log`，生成每日七次保留的 logrotate 配置；确认后自动补齐缺少的 `logrotate` / `acl`。面板重启后再同步实际日志路径并验证读取权限；轮转后的读取权限由管理员保留。日志勿放 `/root` 或 `/home`。
 
 ## 安装目录
 
@@ -87,7 +87,7 @@ HTTP / HTTPS 均需要真实 Xray 验收：不同账号 A / B 分别查询并对
 
 面板接口提供累计计数，没有过去每天账单。FlowNote 只在用户查询时采样；缓存保留真实面板获取时间，默认每小时新增一个点，重置时断线，不回填。默认保留 30 天，允许 1–90 天、采样间隔 300–86400 秒。单账号最多 4096 点，单文件读取上限 512 KiB，最多 1024 个账号文件。
 
-设置 `history.enabled = false` 可停止采样；已存文件不会自动消失。保留清理由有效查询触发，服务空闲或停止时文件可能继续留存。需要清空时，先 `systemctl stop flownote`，确认 `/var/lib/flownote/history` 是实际配置的采样目录，再删除其中的采样文件，最后重启。备份也属于用户数据。存储失败不影响当前流量查询。
+新安装默认关闭历史；设置 `[history]` 下 `enabled = true` 并重启可开启。升级保留已有开关。设置 `history.enabled = false` 可停止采样；已存文件不会自动消失。保留清理由有效查询触发，服务空闲或停止时文件可能继续留存。需要清空时，先 `systemctl stop flownote`，确认 `/var/lib/flownote/history` 是实际配置的采样目录，再删除其中的采样文件，最后重启。备份也属于用户数据。存储失败不影响当前流量查询。
 
 ## 故障排查
 

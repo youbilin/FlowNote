@@ -162,6 +162,8 @@ directory = "{root / "history"}"
             check("history failure preserves live query", res[0] == 200 and json.loads(res[2])["used"] == 3000 and json.loads(res[2])["history"] == [])
             history_path.write_text(json.dumps(alice["history"]))
             check("delayed log association", request("late", delay=.1)[0] == 200)
+            time.sleep(1.1)
+            check("idle tail wakes for delayed identity", request("idle-wake", delay=.1)[0] == 200)
             check("unknown identity denied", request(log_enabled=False)[0] == 403)
             check("other outbound ignored", request("outsider", tag="direct")[0] == 403)
             check("spoofed account parameter rejected", request(path="/json?email=bob")[0] == 400)
@@ -229,6 +231,28 @@ directory = "{root / "history"}"
             else:
                 check("HTTP starts without certificate files", not cert.exists() and not key.exists())
             check("favicon carries no private data", request(path="/favicon.ico")[0] == 204)
+            # Restart with history disabled and a fresh state path: current metrics
+            # must still work without creating history files.
+            proc.terminate()
+            proc.wait(timeout=5)
+            cfg.write_text(cfg.read_text().replace("enabled = true", "enabled = false")
+                           .replace(str(root / "history"), str(root / "disabled-history")))
+            proc = subprocess.Popen([str(binary), str(cfg)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for _ in range(100):
+                if proc.poll() is not None:
+                    raise RuntimeError("history-disabled startup failed")
+                try:
+                    socket.create_connection(("127.0.0.1", port), .1).close()
+                    break
+                except OSError:
+                    time.sleep(.05)
+            else:
+                raise RuntimeError("history-disabled startup timeout")
+            time.sleep(.3)
+            res = request("alice")
+            check("history disabled preserves current metrics", res[0] == 200
+                  and json.loads(res[2])["used"] == 3000 and json.loads(res[2])["history"] == [])
+            check("history disabled creates no state", not (root / "disabled-history").exists())
             print(f"{len(checks)} integration checks passed; synthetic fixtures only")
         finally:
             proc.terminate()

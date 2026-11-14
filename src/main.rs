@@ -42,7 +42,7 @@ struct Ctx {
     tls: Option<TlsAcceptor>,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -335,14 +335,18 @@ async fn handle(
         }
     };
     let now = now_ms();
-    let store = ctx.history.clone();
-    let snapshot = t.clone();
-    let samples = match tokio::task::spawn_blocking(move || store.sample(&snapshot)).await {
-        Ok(Ok(samples)) => samples,
-        _ => {
-            warn!("History unavailable; current traffic remains available");
-            Vec::new()
+    let samples = if ctx.cfg.history.enabled {
+        let store = ctx.history.clone();
+        let snapshot = t.clone();
+        match tokio::task::spawn_blocking(move || store.sample(&snapshot)).await {
+            Ok(Ok(samples)) => samples,
+            _ => {
+                warn!("History unavailable; current traffic remains available");
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
     let t = t.traffic;
     match fmt {

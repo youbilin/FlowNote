@@ -18,6 +18,7 @@ use std::{
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt},
+    sync::Notify,
 };
 
 // ───────────────────────── 身份索引 ─────────────────────────
@@ -45,6 +46,7 @@ struct Entry {
 pub struct Index {
     map: Mutex<HashMap<SocketAddr, Entry>>,
     ttl: Duration,
+    refresh: Notify,
 }
 
 impl Index {
@@ -52,6 +54,7 @@ impl Index {
         Self {
             map: Mutex::new(HashMap::new()),
             ttl,
+            refresh: Notify::new(),
         }
     }
 
@@ -102,6 +105,8 @@ impl Index {
             if Instant::now() >= deadline {
                 return None;
             }
+            // Wake the tail only while an unidentified query needs fresh records.
+            self.refresh.notify_one();
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }
@@ -148,6 +153,7 @@ struct Tail {
     pos: u64,
     ino: u64,
     partial: Vec<u8>,
+    buffer: Vec<u8>,
 }
 
 pub async fn run(path: PathBuf, parser: LogParser, index: Arc<Index>) {
@@ -156,10 +162,10 @@ pub async fn run(path: PathBuf, parser: LogParser, index: Arc<Index>) {
     let mut last_sweep = Instant::now();
     let mut last_warn: Option<Instant> = None;
     loop {
-        let mut delay = Duration::from_millis(100);
+        let mut failed = false;
         if let Err(e) = step(&path, &parser, &index, &mut tail, first).await {
             tail = None;
-            delay = Duration::from_secs(2);
+            failed = true;
             if last_warn.is_none_or(|t| t.elapsed() > Duration::from_secs(30)) {
                 tracing::warn!("跟读 access log 失败(将持续重试): {e:#}");
                 last_warn = Some(Instant::now());
@@ -170,7 +176,15 @@ pub async fn run(path: PathBuf, parser: LogParser, index: Arc<Index>) {
             index.sweep();
             last_sweep = Instant::now();
         }
-        tokio::time::sleep(delay).await;
+        if failed {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        } else {
+            // Idle maintenance only once a second; queries wake us immediately.
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {},
+                _ = index.refresh.notified() => {},
+            }
+        }
     }
 }
 
@@ -203,18 +217,18 @@ async fn step(
             pos,
             ino,
             partial: Vec::new(),
+            buffer: vec![0u8; 16 * 1024],
         });
     }
 
     let t = tail.as_mut().expect("tail set");
-    let mut buf = vec![0u8; 64 * 1024];
     loop {
-        let n = t.file.read(&mut buf).await?;
+        let n = t.file.read(&mut t.buffer).await?;
         if n == 0 {
             break;
         }
         t.pos += n as u64;
-        t.partial.extend_from_slice(&buf[..n]);
+        t.partial.extend_from_slice(&t.buffer[..n]);
 
         let mut start = 0;
         while let Some(off) = t.partial[start..].iter().position(|&b| b == b'\n') {
@@ -229,6 +243,8 @@ async fn step(
         if t.partial.len() > (1 << 20) {
             t.partial.clear(); // 异常超长行保护
         }
+        // A busy access log must not monopolize the single runtime thread.
+        tokio::task::yield_now().await;
     }
     Ok(())
 }

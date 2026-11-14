@@ -246,7 +246,7 @@ class Setup(unittest.TestCase):
         error = wizard.XrayCheckError("fixture failure")
         with patch.object(wizard, "discover", return_value=(core.parent.parent, self.db, core, settings, "http://127.0.0.1")), \
              patch.object(wizard, "check_environment", return_value=None), \
-             patch.object(wizard, "ask", side_effect=["http://127.0.0.1", "/var/log/flownote-xray/access.log", "alice"]), \
+             patch.object(wizard, "ask", side_effect=AssertionError("unexpected manual prompt")), \
              patch.object(wizard.grp, "getgrnam", return_value=type("Group", (), {"gr_gid": 1})()), \
              patch.object(wizard.getpass, "getpass", return_value="private-token"), \
              patch.object(wizard, "BACKUP_ROOT", self.root / "backups"), \
@@ -268,7 +268,7 @@ class Setup(unittest.TestCase):
         error = wizard.XrayCheckError("fixture unsupported finalRules", final_rules_unsupported=True)
         with patch.object(wizard, "discover", return_value=(core.parent.parent, self.db, core, settings, "http://127.0.0.1")), \
              patch.object(wizard, "check_environment", return_value=None), \
-             patch.object(wizard, "ask", side_effect=["http://127.0.0.1", "/var/log/flownote-xray/access.log", "alice"]), \
+             patch.object(wizard, "ask", side_effect=AssertionError("unexpected manual prompt")), \
              patch.object(wizard.grp, "getgrnam", return_value=type("Group", (), {"gr_gid": 1})()), \
              patch.object(wizard.getpass, "getpass", return_value="private-token"), \
              patch.object(wizard, "BACKUP_ROOT", self.root / "backups"), \
@@ -284,6 +284,162 @@ class Setup(unittest.TestCase):
         apply.assert_not_called()
         self.assertTrue(check.call_args.kwargs["stage_access_log"])
         self.assertEqual(self.setting("xrayTemplateConfig"), self.original)
+
+    def test_advanced_mode_can_override_detected_values(self):
+        core = self.root / "bin/xray"
+        core.parent.mkdir()
+        (core.parent / "config.json").write_text(self.original)
+        settings = wizard.read_settings(self.db)
+        with patch.object(wizard, "discover", return_value=(core.parent.parent, self.db, core, settings, "http://127.0.0.1")), \
+             patch.object(wizard, "check_environment"), \
+             patch.object(wizard, "ask", side_effect=["http://127.0.0.1:8090/custom", "/var/log/custom.log", "manual-client"]) as ask, \
+             patch.object(wizard.grp, "getgrnam", return_value=type("Group", (), {"gr_gid": 1})()), \
+             patch.object(wizard.getpass, "getpass", return_value="private-token"), \
+             patch.object(wizard, "BACKUP_ROOT", self.root / "backups"), \
+             patch.object(wizard.os, "chown"), patch.object(wizard.os, "fchown"), \
+             patch.object(wizard, "test_xray") as check, patch.object(wizard, "yes", return_value=False), \
+             patch.object(wizard, "apply_changes") as apply:
+            wizard.setup(wizard.argparse.Namespace(advanced=True))
+        self.assertEqual(ask.call_count, 3)
+        self.assertEqual(check.call_args.args[1]["log"]["access"], "/var/log/custom.log")
+        apply.assert_not_called()
+        preview = next((self.root / "backups").glob("*/config.after.toml")).read_text()
+        self.assertIn('base_url = "http://127.0.0.1:8090/custom"', preview)
+
+    def test_failed_package_install_is_reported(self):
+        with patch.object(wizard, "missing_tools", return_value=["acl"]), \
+             patch.object(wizard.shutil, "which", side_effect=lambda name: name if name == "dnf" else None), \
+             patch.object(wizard, "command"):
+            with self.assertRaises(ValueError):
+                wizard.ensure_tools("/var/log/shared.log")
+
+    def test_runtime_log_wins_over_stale_template(self):
+        self.assertEqual(wizard.choose_access({"log": {"access": "/var/log/x-ui/access.log"}},
+                         {"log": {"access": "/var/log/flownote-xray/access.log"}}), "/var/log/x-ui/access.log")
+        self.assertEqual(wizard.choose_access({"log": {"access": "none"}},
+                         {"log": {"access": "/var/log/shared.log"}}), "/var/log/shared.log")
+        self.assertEqual(wizard.choose_access({}, {}), "/var/log/flownote-xray/access.log")
+
+    def test_log_path_validation(self):
+        for value in ("access.log", "/root/access.log", "/home/user/log", "/var/../root/log", "/var/log/x\n", 7):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                wizard.access_path(value)
+        for value in (None, "", "none", "stdout"):
+            self.assertIsNone(wizard.access_path(value))
+
+    def test_client_identifier_uses_runtime_then_readonly_database(self):
+        runtime = {"inbounds": [{"settings": {"clients": [{"email": "runtime-client"}]}}]}
+        self.assertEqual(wizard.client_identifier(runtime, self.db), "runtime-client")
+        self.assertEqual(wizard.client_identifier({}, self.db), "alice")
+        self.assertEqual(self.setting("apiToken"), "must-not-be-discovered")
+        with wizard.connection(self.db) as conn:
+            conn.execute("DROP TABLE client_traffics")
+        self.assertIsNone(wizard.client_identifier({}, self.db))
+
+    def test_lightweight_generated_configuration(self):
+        import tomllib
+        config = tomllib.loads(wizard.configuration("http://127.0.0.1", "/var/log/shared.log"))
+        self.assertFalse(config["history"]["enabled"])
+        self.assertEqual(config["xray"]["access_log"], "/var/log/shared.log")
+
+    def test_dependency_detection(self):
+        with patch.object(wizard.shutil, "which", return_value=None):
+            self.assertEqual(wizard.missing_tools("/var/log/shared.log"), ["logrotate", "acl"])
+            self.assertEqual(wizard.missing_tools("/var/log/flownote-xray/access.log"), ["logrotate"])
+        with patch.object(wizard.shutil, "which", return_value="/usr/bin/tool"):
+            self.assertEqual(wizard.missing_tools("/var/log/shared.log"), [])
+
+    def test_dependency_installation_is_once_and_checks_result(self):
+        for manager, expected in (("apt-get", ["apt-get", "install", "-y", "acl"]),
+                                  ("dnf", ["dnf", "install", "-y", "acl"]),
+                                  ("apk", ["apk", "add", "--no-cache", "acl"])):
+            with self.subTest(manager=manager), \
+                 patch.object(wizard, "missing_tools", side_effect=[["acl"], []]), \
+                 patch.object(wizard.shutil, "which", side_effect=lambda name: name if name == manager else None), \
+                 patch.object(wizard, "command") as command:
+                wizard.ensure_tools("/var/log/shared.log")
+                self.assertEqual(command.call_args.args[0], expected)
+                self.assertEqual(command.call_args.kwargs["timeout"], 180)
+                if manager == "apt-get":
+                    self.assertEqual(command.call_args_list[0].args[0], ["apt-get", "update"])
+                    self.assertEqual(command.call_args.kwargs["env"]["DEBIAN_FRONTEND"], "noninteractive")
+        with patch.object(wizard, "missing_tools", return_value=[]), patch.object(wizard, "command") as command:
+            wizard.ensure_tools("/var/log/shared.log")
+            command.assert_not_called()
+        with patch.object(wizard, "missing_tools", return_value=["acl"]), \
+             patch.object(wizard.shutil, "which", return_value=None), patch.object(wizard, "command") as command:
+            with self.assertRaises(ValueError):
+                wizard.ensure_tools("/var/log/shared.log")
+            command.assert_not_called()
+
+    def test_reconcile_effective_log_before_starting_service(self):
+        core = self.root / "xray"
+        expected = wizard.merged_config(self.template, "/var/log/flownote-xray/access.log")
+        actual = copy.deepcopy(expected)
+        actual["log"]["access"] = "/var/log/x-ui/access.log"
+        (self.root / "config.json").write_text(json.dumps(actual))
+        config_path = self.root / "config.toml"
+        config = wizard.configuration("http://127.0.0.1", expected["log"]["access"])
+        with patch.object(wizard, "ensure_tools") as tools, patch.object(wizard, "grant_log") as grant, \
+             patch.object(wizard, "command") as command, patch.object(wizard.os, "fchown"):
+            wizard.reconcile_log(core, config_path, config, 1, self.root, expected)
+        tools.assert_called_once_with("/var/log/x-ui/access.log")
+        grant.assert_called_once_with("/var/log/x-ui/access.log", 1, self.root)
+        self.assertIn('access_log = "/var/log/x-ui/access.log"', config_path.read_text())
+        self.assertEqual(config_path.read_text(), (self.root / "config.after.toml").read_text())
+        self.assertEqual(command.call_args.args[0][-1], "/var/log/x-ui/access.log")
+
+    def test_reconcile_same_log_needs_no_rewrite(self):
+        expected = wizard.merged_config(self.template, "/var/log/shared.log")
+        (self.root / "config.json").write_text(json.dumps(expected))
+        config_path = self.root / "unchanged.toml"
+        with patch.object(wizard, "ensure_tools") as tools, patch.object(wizard, "grant_log") as grant, \
+             patch.object(wizard, "command") as command:
+            wizard.reconcile_log(self.root / "xray", config_path, "untouched", 1, self.root, expected)
+        tools.assert_not_called()
+        grant.assert_not_called()
+        command.assert_called_once()
+        self.assertFalse(config_path.exists())
+
+    def test_reconcile_allows_panel_management_route_before_query_rules(self):
+        expected = wizard.merged_config(self.template, "/var/log/shared.log")
+        actual = copy.deepcopy(expected)
+        api_rule = actual["routing"]["rules"].pop()
+        actual["routing"]["rules"].insert(0, api_rule)
+        (self.root / "config.json").write_text(json.dumps(actual))
+        with patch.object(wizard, "command") as command:
+            wizard.reconcile_log(self.root / "xray", self.root / "config.toml", "", 1, self.root, expected)
+            command.assert_called_once()
+
+    def test_reconcile_rejects_missing_routes_masking_or_disabled_log(self):
+        expected = wizard.merged_config(self.template, "/var/log/shared.log")
+        for kind in ("route", "outbound", "masked", "disabled", "shadowed"):
+
+            actual = copy.deepcopy(expected)
+            if kind == "route":
+                actual["routing"]["rules"].pop(0)
+            elif kind == "outbound":
+                actual["outbounds"].pop(2)
+            elif kind == "masked":
+                actual["log"]["maskAddress"] = "quarter"
+            elif kind == "shadowed":
+                actual["routing"]["rules"].insert(0, {"type": "field", "network": "tcp", "outboundTag": "direct"})
+            else:
+                actual["log"]["access"] = "none"
+            (self.root / "config.json").write_text(json.dumps(actual))
+            with self.subTest(kind=kind), patch.object(wizard, "command") as command:
+                with self.assertRaises(ValueError):
+                    wizard.reconcile_log(self.root / "xray", self.root / "config.toml", "", 1, self.root, expected)
+                command.assert_not_called()
+
+    def test_reconcile_failure_rolls_back_before_flow_service_restart(self):
+        _, config, token, calls, _ = self.apply_fixture("reconcile_log")
+        self.assertEqual(config.read_text(), "old config")
+        self.assertEqual(token.read_text(), "old token")
+        self.assertEqual(self.setting("xrayTemplateConfig"), self.original)
+        self.assertEqual(calls.count(["systemctl", "start", "x-ui"]), 2)
+        self.assertGreater(calls.index(["systemctl", "restart", "flownote"]),
+                           max(i for i, c in enumerate(calls) if c == ["systemctl", "start", "x-ui"]))
 
     def apply_fixture(self, fail_at=None, interrupt=False):
         directory = self.root / "backup"
@@ -307,7 +463,9 @@ class Setup(unittest.TestCase):
                    patch.object(wizard, "grant_log", side_effect=lambda *args: calls.append(["grant_log"])), patch.object(wizard, "wait_service"),
                    patch.object(wizard.subprocess, "run", return_value=wizard.subprocess.CompletedProcess([], 0)),
                    patch.object(wizard.os, "fchown"))
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patch.object(wizard, "ensure_tools"), \
+             patch.object(wizard, "reconcile_log", side_effect=lambda *args: run(["reconcile_log"])):
             if fail_at:
                 with self.assertRaises(ValueError):
                     wizard.apply_changes(self.db, directory, self.original, replacement,

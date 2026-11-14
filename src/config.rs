@@ -301,6 +301,7 @@ mod tests {
             assert!(c.validate().is_err());
         }
         let mut c = sample();
+        c.history.enabled = true;
         c.history.directory = "relative".into();
         assert!(c.validate().is_err());
         let mut c = sample();

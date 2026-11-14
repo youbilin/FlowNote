@@ -8,7 +8,7 @@
 A minimal traffic dashboard for users sharing a 3x-ui server through individual accounts. No panel subscription or end-user login required.
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.5-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.6-246852)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [简体中文](README.md) · **English**
@@ -26,6 +26,12 @@ Screenshots use synthetic data. The UI is in Chinese; this README does not imply
 - HTML, text and JSON; GET / HEAD. Query parameters cannot select another account.
 - Default **http://6.6.6.6/** without DNS or certificates. Existing native HTTPS deployments remain supported.
 
+## Lightweight operation
+
+One Rust process with a single asynchronous runtime thread; filesystem operations may use helper threads. No frontend build, database service or periodic traffic collector. Idle log checks run once per second and queries wake the reader immediately. New configurations disable history by default and skip history file I/O. Enable `[history] enabled = true` to retain query-time samples.
+
+Working installations can upgrade without rerunning setup: use the installation command below **without `--setup`**. Existing configuration, tokens and history preferences are preserved. To disable previously enabled history, set `enabled = false` under `[history]` in `/etc/flownote/config.toml` and restart `flownote`. `MemoryMax=192M` is a ceiling, not reserved RAM. See [measurements and validation](docs/TESTING.md).
+
 ## Set up http://6.6.6.6/
 
 6.6.6.6 is a real public address used only as an intercepted routing convention. FlowNote does not own or contact it. Do not assign it to an interface or expose port 8686.
@@ -34,7 +40,7 @@ Screenshots use synthetic data. The UI is in Chinese; this README does not imply
 2. Install the fixed release:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.5/install.sh | sudo bash -s -- --version v0.3.5 --setup
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.6/install.sh | sudo bash -s -- --version v0.3.6 --setup
 ```
 
 The installer validates SHA-256, archive paths and binary version. First installs wait for configuration before starting. Existing configurations and secrets are preserved; active services restart on upgrade. You can download and inspect the script first, or use `--download-only ./flownote-download` without installing.
@@ -47,13 +53,13 @@ sudo flownote-setup
 sudo flownote-setup --detect
 ```
 
-Choose `2` to configure the HTTP entry. The wizard discovers `/usr/local/x-ui`, `/etc/x-ui/x-ui.db`, the executable under `bin/`, and the actual panel port/base path. HTTPS panels require an explicit URL with a valid certificate. Enter your API token without echo and an existing 3x-ui client email identifier (for example `alice`, not necessarily a mailbox) to check API permissions. If the persisted Xray template is missing, save the existing configuration once in the panel's Xray settings and rerun.
+Choose `2` to configure the HTTP entry. Standard installations only need an API token (hidden input) and confirmation. The wizard discovers panel paths and the actual port/base path, prefers the running Xray log over the persisted template, and selects an existing client to validate API access. A client identifier is requested only when none is found. HTTPS panels require an explicit verified URL. Use `sudo flownote-setup --advanced` for manual overrides. If the persisted template is missing, save the current configuration once in the panel's Xray settings and rerun.
 
-Setup inputs: accept the suggested access-log path if unsure; the wizard configures it to associate query connections with client accounts. Copy the email field from an existing 3x-ui client for API validation (for example `alice`); it need not be a mailbox and no email is sent.
+After confirmation, missing `logrotate` / `acl` tools are installed through apt-get, dnf or apk. After restarting the panel, the wizard verifies query routes and full source addresses, synchronizes the effective log path and checks read access before starting FlowNote. Shared log rotation must preserve permissions.
 
-In v0.3.5, the initial Xray check uses a private temporary access log, so a not-yet-created production log directory does not fail first-time setup. After confirmation, the wizard prepares the real log and checks the exact candidate before restarting x-ui. Only an explicit unsupported `finalRules` error offers a compatibility retry. On failure, root-only `xray-check.stdout.log` and `xray-check.stderr.log` retain raw diagnostics at the displayed paths; redact credentials before sharing errors.
+The initial Xray check uses a private temporary access log, so a not-yet-created production log directory does not fail first-time setup. After confirmation, the wizard prepares the real log and checks the exact candidate before restarting x-ui. Only an explicit unsupported `finalRules` error offers a compatibility retry. On failure, root-only `xray-check.stdout.log` and `xray-check.stderr.log` retain raw diagnostics at the displayed paths; redact credentials before sharing errors.
 
-After explicit confirmation, it validates the panel, backs up to root-only `/var/backups/flownote/`, merges the query outbound/rules into the persisted template, grants log access, and starts FlowNote. Restarting x-ui can briefly interrupt connections. Existing custom FlowNote settings are backed up and replaced with the generated HTTP/history config; Xray source-address masking is disabled for account correlation. On failure it attempts to restore only the template and FlowNote settings; it does not restore the whole traffic database. Log files, ACLs or rotation changes may remain. The default dedicated log needs system `logrotate`; existing logs must retain read permissions across rotation.
+After explicit confirmation, it validates the panel, backs up to root-only `/var/backups/flownote/`, merges the query outbound/rules into the persisted template, grants log access, and starts FlowNote. Restarting x-ui can briefly interrupt connections. Existing custom FlowNote settings are backed up and replaced with the generated HTTP config with history disabled; Xray source-address masking is disabled for account correlation. On failure it attempts to restore only the template and FlowNote settings; it does not restore the whole traffic database. Installed packages, log files, ACLs or rotation changes may remain. The default dedicated log needs system `logrotate`; existing logs must retain read permissions across rotation.
 
 **After successful setup, skip manual steps 3–5 and 7. Continue with client routing in step 6, then query and perform the real two-account checks in steps 8–9.** The wizard supports local systemd/SQLite installations; Docker, PostgreSQL and remote panels need manual configuration. Custom locations: `sudo flownote-setup --xui-dir /path/to/panel --db /path/to/x-ui.db --core /path/to/xray`.
 
@@ -74,7 +80,7 @@ base_url = "http://127.0.0.1:2053"
 token_file = "/etc/flownote/token"
 ```
 
-Include your panel webBasePath in base_url if configured, without appending /panel/api. Remote panel HTTP is rejected; use verified HTTPS. Do not add `[tls]` in HTTP mode. The full template also enables optional query history.
+Include your panel webBasePath in base_url if configured, without appending /panel/api. Remote panel HTTP is rejected; use verified HTTPS. Do not add `[tls]` in HTTP mode. The full template includes optional query history, disabled by default.
 
 4. Enable Xray access logging at the same path. Grant flownote read permission on that file and traversal of its parent directories; preserve access after rotation. Do not recursively expose the panel directory or database.
 5. Merge [xray-snippet.json](deploy/xray-snippet.json) into the persistent Xray configuration. Append the traffic-query freedom outbound with redirect `127.0.0.1:8686` and proxyProtocol `2`. Keep the existing default outbound first. Insert the exact `6.6.6.6/32`, TCP, port 80 routing rule before other rules; the following block rule prevents other traffic to that IP leaving the server. Explanatory keys are merge instructions, not Xray fields. Newer freedom versions may need a supported finalRules exception allowing only TCP loopback port 8686 for this outbound.
@@ -140,6 +146,6 @@ The preview contains synthetic static pages and needs no configuration or panel.
 
 ## Uninstall
 
-Upgrade to v0.3.5, run `sudo flownote-setup`, then select **5**. Choose **1** and type `UNINSTALL` to remove the application, menu and service while retaining configuration, token, certificates, history, logs and backups. Choose **2** and type `DELETE` to additionally erase `/etc/flownote`, `/var/lib/flownote` and `/var/backups/flownote`, plus unused dedicated logs/rotation and the standard service account. Purging includes private certificates and all recovery backups and cannot be undone.
+Upgrade to v0.3.6, run `sudo flownote-setup`, then select **5**. Choose **1** and type `UNINSTALL` to remove the application, menu and service while retaining configuration, token, certificates, history, logs and backups. Choose **2** and type `DELETE` to additionally erase `/etc/flownote`, `/var/lib/flownote` and `/var/backups/flownote`, plus unused dedicated logs/rotation and the standard service account. Purging includes private certificates and all recovery backups and cannot be undone.
 
 Both modes validate and remove only recognized wizard query outbounds/rules from the persistent Xray template, preserving nodes and traffic counters. Matching original backups can restore only unchanged log keys. Candidate-check or Xray-restart failure prevents application deletion; conflicting custom/HTTPS query rules need manual handling. If Xray still uses the dedicated log, its files, rotation and service account remain even during purge. Custom paths, shared log ACLs and system journals are retained. Remove client routing rules first and revoke unused panel API tokens separately.

@@ -26,7 +26,7 @@ BLOCK = "flownote-block"
 
 
 def command(args, **kwargs):
-    return subprocess.run(args, check=True, text=True, capture_output=True, timeout=30, **kwargs)
+    return subprocess.run(args, check=True, text=True, capture_output=True, timeout=kwargs.pop("timeout", 30), **kwargs)
 
 
 @contextmanager
@@ -157,7 +157,7 @@ token_file = "/etc/flownote/token"
 title = "流量笺"
 tz_offset_hours = 8
 [history]
-enabled = true
+enabled = false
 directory = "/var/lib/flownote/history"
 retention_days = 30
 sample_interval_secs = 3600
@@ -368,6 +368,99 @@ def grant_log(log, group, directory):
     command(["runuser", "-u", "flownote", "--", "test", "-r", str(path)])
 
 
+def access_path(value):
+    if value in (None, "", "none", "stdout"):
+        return None
+    if not isinstance(value, str) or not Path(value).is_absolute() or any(c in value for c in "\n\r\0"):
+        raise ValueError("Xray 访问日志必须使用绝对路径；请先在面板日志设置中调整")
+    path = Path(value).resolve()
+    if any(p == path or p in path.parents for p in (Path("/root"), Path("/home"))):
+        raise ValueError("日志不能放在 /root 或 /home；请在面板设置 /var/log 下的路径")
+    return value
+
+
+def choose_access(runtime, template):
+    # The panel may override the stored template when generating config.json.
+    return (access_path(runtime.get("log", {}).get("access"))
+            or access_path(template.get("log", {}).get("access"))
+            or "/var/log/flownote-xray/access.log")
+
+
+def client_identifier(runtime, db):
+    for inbound in runtime.get("inbounds", []):
+        for client in inbound.get("settings", {}).get("clients", []):
+            email = client.get("email")
+            if isinstance(email, str) and email and not any(c.isspace() or ord(c) < 32 for c in email):
+                return email
+    try:
+        with connection(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=5) as conn:
+            row = conn.execute("SELECT email FROM client_traffics WHERE email IS NOT NULL AND email != '' ORDER BY email LIMIT 1").fetchone()
+    except sqlite3.OperationalError:
+        return None  # Older / empty panels fall back to the explicit prompt.
+    if row and isinstance(row[0], str) and not any(c.isspace() or ord(c) < 32 for c in row[0]):
+        return row[0]
+    return None
+
+
+def missing_tools(access):
+    packages = []
+    if not shutil.which("logrotate"):
+        packages.append("logrotate")
+    if Path(access).parent != Path("/var/log/flownote-xray") and not shutil.which("setfacl"):
+        packages.append("acl")
+    return packages
+
+
+def ensure_tools(access):
+    packages = missing_tools(access)
+    if not packages:
+        return
+    print("安装配置依赖: " + ", ".join(packages))
+    if shutil.which("apt-get"):
+        command(["apt-get", "update"], timeout=180)
+        command(["apt-get", "install", "-y", *packages], timeout=180,
+                env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+    elif shutil.which("dnf"):
+        command(["dnf", "install", "-y", *packages], timeout=180)
+    elif shutil.which("apk"):
+        command(["apk", "add", "--no-cache", *packages], timeout=180)
+    else:
+        raise ValueError("请先用系统包管理器安装: " + " ".join(packages))
+    if missing_tools(access):
+        raise ValueError("依赖安装后仍找不到工具，请检查系统 PATH: " + " ".join(missing_tools(access)))
+
+
+def reconcile_log(core, config_path, config, group, directory, expected):
+    actual = load_json((core.parent / "config.json").read_text(encoding="utf-8"))
+    access = access_path(actual.get("log", {}).get("access"))
+    if not access:
+        raise ValueError("面板重新生成的 Xray 配置未启用文件访问日志")
+    query = next(o for o in expected["outbounds"] if o.get("tag") == QUERY)
+    final_rules = "finalRules" in query["settings"]
+    verified = merged_config(actual, access, final_rules)
+    # The panel may prepend its management API route on regeneration.
+    # That rule targets only the reserved API inbound, not user queries.
+    api_rule = {"type": "field", "inboundTag": ["api"], "outboundTag": "api"}
+    rules = [rule for rule in actual.get("routing", {}).get("rules", []) if rule != api_rule]
+    if (actual["outbounds"] != verified["outbounds"] or actual["log"] != verified["log"]
+            or rules[:2] != verified["routing"]["rules"][:2]):
+        raise ValueError("面板未保留查询路由、出站或完整来源地址，停止启动 FlowNote")
+    before = access_path(expected.get("log", {}).get("access"))
+    if access != before:
+        # Reuse the effective panel log, rather than starting another logger or service.
+        ensure_tools(access)
+        grant_log(access, group, directory)
+        old = "access_log = " + json.dumps(before, ensure_ascii=False)
+        new = "access_log = " + json.dumps(access, ensure_ascii=False)
+        if config.count(old) != 1:
+            raise ValueError("无法唯一同步 FlowNote 日志路径")
+        config = config.replace(old, new, 1)
+        write_private(config_path, config, group)
+        write_private(directory / "config.after.toml", config)
+        print("已同步面板实际访问日志: " + access)
+    command(["runuser", "-u", "flownote", "--", "test", "-r", access])
+
+
 def setup(args):
     base, db, core, settings, default = discover(args)
     port_override = check_environment(base, db, core)
@@ -379,13 +472,16 @@ def setup(args):
         raise ValueError("未找到持久化 Xray 模板。请在 3x-ui 的 Xray 设置页保存一次现有配置，再运行向导；不会把运行时 config.json 当作面板模板覆盖")
     template = load_json(original)
     runtime = load_json((core.parent / "config.json").read_text(encoding="utf-8"))
-    base_url = validate_url(ask("面板 API 地址（包含面板访问路径）", default or ""))
-    access = template.get("log", {}).get("access", "")
-    access = access if access not in ("", "none", "stdout") and Path(access).is_absolute() else "/var/log/flownote-xray/access.log"
-    print("访问日志用于识别查询用户；不确定路径时直接回车，向导会配置日志和权限。")
-    access = ask("Xray 访问日志路径", access)
-    if Path(access) in (Path("/root"), Path("/home")) or any(p in Path(access).parents for p in (Path("/root"), Path("/home"))):
-        raise ValueError("systemd ProtectHome 会阻止读取此日志，请使用 /var/log/flownote-xray/access.log")
+    advanced = getattr(args, "advanced", False)
+    base_url = validate_url(ask("面板 API 地址（包含面板访问路径）", default or "")
+                            if advanced or not default else default)
+    access = choose_access(runtime, template)
+    if advanced:
+        access = access_path(ask("Xray 访问日志路径", access))
+        if not access:
+            raise ValueError("必须启用文件访问日志")
+    print("面板地址: " + base_url)
+    print("自动使用 Xray 访问日志: " + access)
     group = grp.getgrnam("flownote").gr_gid
     token_path = Path("/etc/flownote/token")
     token = getpass.getpass("面板 API Token（不回显；留空保留已有 Token）: ").strip()
@@ -393,8 +489,11 @@ def setup(args):
         raise ValueError("首次配置需要 API Token；请在面板创建后粘贴，不是登录密码或订阅链接")
     if any(c in token for c in "\r\n\0"):
         raise ValueError("Token 不能含换行或 NUL")
-    print("在 3x-ui 入站列表展开节点，复制一个已有客户端的 email 字段（如 alice）；不要求真实邮箱，用于验证流量 API。")
-    email = ask("3x-ui 客户端标识（email 字段）")
+    email = client_identifier(runtime, db)
+    if advanced or not email:
+        email = ask("3x-ui 已有客户端的 email 标识（无需真实邮箱）", email or "")
+    else:
+        print("已自动选择已有客户端用于验证流量 API。")
     if not email:
         raise ValueError("请填写面板里一个已有客户端的 email 标识，用于验证流量 API；不是面板登录账号")
     final_rules = True
@@ -425,10 +524,13 @@ def setup(args):
     print("\n将保存 HTTP 配置、Token 和日志权限；追加两个出站及两条精确 IP 路由。")
     print("原默认出站、节点、订阅开关与面板登录设置保留。")
     print("访问日志保留完整来源 IP:端口，用于账号关联；不做地址掩码。")
-    print("将使用向导生成的 HTTP / 历史采样配置；已有 FlowNote 自定义配置先备份。")
+    print("使用轻量配置，历史曲线默认关闭；已有配置先备份。")
     print("会短暂停止 / 启动 x-ui（节点连接可能断开），并启动 FlowNote。")
     print("变更预览 / 备份目录:", directory)
     print("如使用现有日志，只对该日志授予 ACL；日志轮转仍需保持权限。")
+    packages = missing_tools(access)
+    if packages:
+        print("确认后自动补齐配置依赖: " + ", ".join(packages))
     if not yes("确认应用以上变更？"):
         print("已取消，面板和服务未修改。预览文件已保留。")
         return
@@ -450,6 +552,7 @@ def apply_changes(db, directory, original, replacement, config_path, config,
     stopped = updated = False
     was_active = subprocess.run(["systemctl", "is-active", "--quiet", "flownote"], timeout=5).returncode == 0
     try:
+        ensure_tools(access)
         # Validate panel before touching the running x-ui service.
         if token:
             write_private(token_path, token + "\n", group)
@@ -464,6 +567,7 @@ def apply_changes(db, directory, original, replacement, config_path, config,
         snapshot_and_update(db, directory / "x-ui.before.db", original, replacement)
         command(["systemctl", "start", "x-ui"])
         wait_service("x-ui", core)
+        reconcile_log(core, config_path, config, group, directory, runtime_config)
         command(["systemctl", "restart", "flownote"])
         wait_service("flownote")
         command(["systemctl", "enable", "flownote"])
@@ -753,6 +857,7 @@ def main():
     parser.add_argument("--db", default="/etc/x-ui/x-ui.db")
     parser.add_argument("--xui-dir", default="/usr/local/x-ui")
     parser.add_argument("--core", help="自定义 Xray 内核路径")
+    parser.add_argument("--advanced", action="store_true", help="手动指定面板地址、日志与验证客户端")
     parser.add_argument("--detect", action="store_true", help="只读探测，不修改配置")
     args = parser.parse_args()
     if sys.platform != "linux" or os.geteuid() != 0:
