@@ -5,7 +5,16 @@
 - `tests/setup.py`：48 组通过，新增查询配置反向合并、只恢复匹配日志键、重复安装备份检索、自定义 / 默认出站 / balancer 引用拒绝、固定路径 / 符号链接 / 挂载点保护、保留数据与完全清理、取消零写入、Xray 失败 / Ctrl-C 回退、仍在使用日志时保留账号、非标准账号保护。
 - `tests/installer.py`：9 组通过。
 - Rust fmt / clippy --all-targets、34 个单元测试、调试构建、37 项 HTTP 与 39 项 HTTPS / PROXY 集成检查通过。三个 shell 脚本通过 shellcheck。
-- 公开发布资产验证在发布后追加。
+## v0.3.4 公开发布验证
+
+2026-11-14：[CI](https://github.com/youbilin/FlowNote/actions/runs/43605129974) 与 [Release](https://github.com/youbilin/FlowNote/actions/runs/43605289289) 全部通过，包含原生 Linux amd64 / arm64 构建及公开发布。
+
+- 重新下载两个归档、install.sh 与 SHA256SUMS，全部资产摘要匹配；readelf 确认架构与静态程序，无动态解释器。
+- 下载的 amd64 二进制版本为 0.3.4，37 项 HTTP 与 39 项 HTTPS / PROXY 检查再次通过。
+- 实际包内 setup.py 在真实 PTY 进入卸载子菜单并返回，未选择任何删除操作；将 48 组向导 / 卸载回归直接运行于下载的 setup.py，全部通过，主机命令仍使用模拟实现。
+- 实际公开 install.sh 以 `--version v0.3.4 --download-only` 从 GitHub 下载、校验并保存包成功。
+- 未在用户 VPS 执行卸载、删除用户数据或修改真实 3x-ui。模拟回归不替代目标服务器运行验证。
+
 
 ---
 
