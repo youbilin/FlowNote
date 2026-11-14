@@ -3,17 +3,17 @@
 set -Eeuo pipefail
 
 main() {
-    local version='v0.3.4' interactive=false download_only='' arch='' release root_dir archive tmp expected actual dest was_active=false
+    local version='v0.3.5' interactive=false download_only='' arch='' release root_dir archive tmp expected actual dest was_active=false
     while (($#)); do
         case "$1" in
             --version) [[ $# -ge 2 ]] || die 'Missing --version value'; version="$2"; shift 2 ;;
             --download-only) [[ $# -ge 2 ]] || die 'Missing output directory'; download_only="$2"; shift 2 ;;
             --setup) interactive=true; shift ;;
-            -h|--help) printf '%s\n' 'Usage: bash install.sh [--version v0.3.4] [--download-only DIR] [--setup]' 'Installs binary, example config and systemd unit; configure panel token, log access and Xray/client routing before first start.'; return ;;
+            -h|--help) printf '%s\n' 'Usage: bash install.sh [--version v0.3.5] [--download-only DIR] [--setup]' 'Installs binary, example config and systemd unit; configure panel token, log access and Xray/client routing before first start.'; return ;;
             *) die "Unknown option: $1" ;;
         esac
     done
-    [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Version must look like v0.3.4'
+    [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Version must look like v0.3.5'
     [[ "$(uname -s)" == Linux ]] || die 'Only Linux is supported'
     case "$(uname -m)" in
         x86_64|amd64) arch=amd64 ;;

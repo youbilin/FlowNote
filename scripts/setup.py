@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -262,14 +263,48 @@ def discover(args):
     return base, db, core, settings, default
 
 
-def test_xray(core, value, directory):
+class XrayCheckError(ValueError):
+    def __init__(self, message, final_rules_unsupported=False):
+        super().__init__(message)
+        self.final_rules_unsupported = final_rules_unsupported
+
+
+def test_xray(core, value, directory, *, stage_access_log=False):
+    # Xray -test initializes loggers, including files whose parent may not exist yet.
+    # Validate with a private access log until the user confirms applying changes.
+    checked = copy.deepcopy(value)
+    if stage_access_log:
+        access = directory / "xray-preflight-access.log"
+        write_private(access, "")
+        checked.setdefault("log", {})["access"] = str(access)
     candidate = directory / "xray-check.json"
-    write_private(candidate, json.dumps(value, ensure_ascii=False))
+    write_private(candidate, json.dumps(checked, ensure_ascii=False))
     env = dict(os.environ, XRAY_LOCATION_ASSET=str(core.parent))
     try:
         command([str(core), "run", "-test", "-config", str(candidate)], cwd=str(core.parent), env=env)
-    except subprocess.CalledProcessError:
-        raise ValueError("Xray 配置检查失败；未改面板。请检查向导导出的配置，勿公开其中账号密钥") from None
+    except subprocess.CalledProcessError as exc:
+        stdout, stderr = exc.stdout or "", exc.stderr or ""
+        write_private(directory / "xray-check.stdout.log", stdout)
+        write_private(directory / "xray-check.stderr.log", stderr)
+        detail = (stdout + "\n" + stderr).lower()
+        unsupported = bool(re.search(
+            r"(?:unknown|unrecognized|unsupported|invalid) (?:json )?field\s*[:=]?\s*\W?finalrules\b"
+            r"|finalrules[^\n]{0,80}(?:unknown|unrecognized|unsupported|not supported)", detail))
+        reason = ""
+        if unsupported:
+            reason = "当前内核不识别 finalRules 字段。"
+        elif "failed to initialize access logger" in detail:
+            reason = "访问日志无法打开，请检查日志目录是否存在及权限。"
+        elif "failed to initialize error logger" in detail:
+            reason = "Xray 错误日志无法打开，请检查原错误日志路径及权限。"
+        elif ("geosite" in detail or "geoip" in detail) and any(
+                term in detail for term in ("no such file", "failed to open", "not found")):
+            reason = "GeoIP / GeoSite 资源文件缺失，请检查内核资源目录。"
+        raise XrayCheckError(
+            "Xray 配置检查失败（退出码 {}）；未改面板。{}原始错误已保存：{} 和 {}；"
+            "请在服务器本机查看，勿公开其中账号密钥。".format(
+                exc.returncode, reason, directory / "xray-check.stdout.log", directory / "xray-check.stderr.log"),
+            final_rules_unsupported=unsupported) from None
 
 
 def core_running(core):
@@ -347,7 +382,8 @@ def setup(args):
     base_url = validate_url(ask("面板 API 地址（包含面板访问路径）", default or ""))
     access = template.get("log", {}).get("access", "")
     access = access if access not in ("", "none", "stdout") and Path(access).is_absolute() else "/var/log/flownote-xray/access.log"
-    access = ask("Xray access log", access)
+    print("访问日志用于识别查询用户；不确定路径时直接回车，向导会配置日志和权限。")
+    access = ask("Xray 访问日志路径", access)
     if Path(access) in (Path("/root"), Path("/home")) or any(p in Path(access).parents for p in (Path("/root"), Path("/home"))):
         raise ValueError("systemd ProtectHome 会阻止读取此日志，请使用 /var/log/flownote-xray/access.log")
     group = grp.getgrnam("flownote").gr_gid
@@ -357,9 +393,10 @@ def setup(args):
         raise ValueError("首次配置需要 API Token；请在面板创建后粘贴，不是登录密码或订阅链接")
     if any(c in token for c in "\r\n\0"):
         raise ValueError("Token 不能含换行或 NUL")
-    email = ask("填写一个真实 client email，用于验证面板权限")
+    print("在 3x-ui 入站列表展开节点，复制一个已有客户端的 email 字段（如 alice）；不要求真实邮箱，用于验证流量 API。")
+    email = ask("3x-ui 客户端标识（email 字段）")
     if not email:
-        raise ValueError("需要真实 client email 才能验证接口兼容和权限")
+        raise ValueError("请填写面板里一个已有客户端的 email 标识，用于验证流量 API；不是面板登录账号")
     final_rules = True
     merged = merged_config(template, access, final_rules)
     run_merged = merged_config(runtime, access, final_rules)
@@ -372,12 +409,16 @@ def setup(args):
     directory = Path(tempfile.mkdtemp(prefix=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ-"), dir=str(root)))
     write_private(directory / "xray-template.after.json", json.dumps(merged, ensure_ascii=False, indent=2))
     try:
-        test_xray(core, run_merged, directory)
-    except ValueError:
-        if not yes("内核不接受新配置。去除新版 finalRules 后重新检查？"):
+        test_xray(core, run_merged, directory, stage_access_log=True)
+    except XrayCheckError as exc:
+        if not exc.final_rules_unsupported:
+            raise
+        print(str(exc), file=sys.stderr)
+        if not yes("内核不识别 finalRules。去除此字段后重新检查？"):
             raise
         merged = merged_config(template, access, False)
-        test_xray(core, merged_config(runtime, access, False), directory)
+        run_merged = merged_config(runtime, access, False)
+        test_xray(core, run_merged, directory, stage_access_log=True)
         write_private(directory / "xray-template.after.json", json.dumps(merged, ensure_ascii=False, indent=2))
     config = configuration(base_url, access)
     write_private(directory / "config.after.toml", config)
@@ -393,13 +434,13 @@ def setup(args):
         return
     apply_changes(db, directory, original, json.dumps(merged, ensure_ascii=False),
                   Path("/etc/flownote/config.toml"), config, token_path, token,
-                  group, access, email, core)
+                  group, access, email, core, run_merged)
     print("\n服务已启动。还需在客户端加规则，并完成双账号查询验收：")
     client_rules()
 
 
 def apply_changes(db, directory, original, replacement, config_path, config,
-                  token_path, token, group, access, email, core):
+                  token_path, token, group, access, email, core, runtime_config):
     for path in (config_path, token_path):
         if path.is_symlink():
             raise ValueError("拒绝替换符号链接配置 / Token")
@@ -415,6 +456,8 @@ def apply_changes(db, directory, original, replacement, config_path, config,
         write_private(config_path, config, group)
         command(["runuser", "-u", "flownote", "--", "/usr/local/bin/flownote", str(config_path), "--check-panel", email])
         grant_log(access, group, directory)
+        # Recheck the exact runtime candidate with its real log before stopping x-ui.
+        test_xray(core, runtime_config, directory)
         stopped = True
         command(["systemctl", "stop", "x-ui"])
         updated = True
@@ -424,7 +467,9 @@ def apply_changes(db, directory, original, replacement, config_path, config,
         command(["systemctl", "restart", "flownote"])
         wait_service("flownote")
         command(["systemctl", "enable", "flownote"])
-    except BaseException:
+    except BaseException as exc:
+        if isinstance(exc, XrayCheckError):
+            print(str(exc), file=sys.stderr)
         try:
             if updated:
                 command(["systemctl", "stop", "x-ui"])

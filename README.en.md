@@ -8,7 +8,7 @@
 A minimal traffic dashboard for users sharing a 3x-ui server through individual accounts. No panel subscription or end-user login required.
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.4-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.5-246852)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [简体中文](README.md) · **English**
@@ -34,7 +34,7 @@ Screenshots use synthetic data. The UI is in Chinese; this README does not imply
 2. Install the fixed release:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.4/install.sh | sudo bash -s -- --version v0.3.4 --setup
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.5/install.sh | sudo bash -s -- --version v0.3.5 --setup
 ```
 
 The installer validates SHA-256, archive paths and binary version. First installs wait for configuration before starting. Existing configurations and secrets are preserved; active services restart on upgrade. You can download and inspect the script first, or use `--download-only ./flownote-download` without installing.
@@ -47,7 +47,11 @@ sudo flownote-setup
 sudo flownote-setup --detect
 ```
 
-Choose `2` to configure the HTTP entry. The wizard discovers `/usr/local/x-ui`, `/etc/x-ui/x-ui.db`, the executable under `bin/`, and the actual panel port/base path. HTTPS panels require an explicit URL with a valid certificate. Enter your API token without echo and a real client email to check API permissions. If the persisted Xray template is missing, save the existing configuration once in the panel's Xray settings and rerun.
+Choose `2` to configure the HTTP entry. The wizard discovers `/usr/local/x-ui`, `/etc/x-ui/x-ui.db`, the executable under `bin/`, and the actual panel port/base path. HTTPS panels require an explicit URL with a valid certificate. Enter your API token without echo and an existing 3x-ui client email identifier (for example `alice`, not necessarily a mailbox) to check API permissions. If the persisted Xray template is missing, save the existing configuration once in the panel's Xray settings and rerun.
+
+Setup inputs: accept the suggested access-log path if unsure; the wizard configures it to associate query connections with client accounts. Copy the email field from an existing 3x-ui client for API validation (for example `alice`); it need not be a mailbox and no email is sent.
+
+In v0.3.5, the initial Xray check uses a private temporary access log, so a not-yet-created production log directory does not fail first-time setup. After confirmation, the wizard prepares the real log and checks the exact candidate before restarting x-ui. Only an explicit unsupported `finalRules` error offers a compatibility retry. On failure, root-only `xray-check.stdout.log` and `xray-check.stderr.log` retain raw diagnostics at the displayed paths; redact credentials before sharing errors.
 
 After explicit confirmation, it validates the panel, backs up to root-only `/var/backups/flownote/`, merges the query outbound/rules into the persisted template, grants log access, and starts FlowNote. Restarting x-ui can briefly interrupt connections. Existing custom FlowNote settings are backed up and replaced with the generated HTTP/history config; Xray source-address masking is disabled for account correlation. On failure it attempts to restore only the template and FlowNote settings; it does not restore the whole traffic database. Log files, ACLs or rotation changes may remain. The default dedicated log needs system `logrotate`; existing logs must retain read permissions across rotation.
 
@@ -136,6 +140,6 @@ The preview contains synthetic static pages and needs no configuration or panel.
 
 ## Uninstall
 
-Upgrade to v0.3.4, run `sudo flownote-setup`, then select **5**. Choose **1** and type `UNINSTALL` to remove the application, menu and service while retaining configuration, token, certificates, history, logs and backups. Choose **2** and type `DELETE` to additionally erase `/etc/flownote`, `/var/lib/flownote` and `/var/backups/flownote`, plus unused dedicated logs/rotation and the standard service account. Purging includes private certificates and all recovery backups and cannot be undone.
+Upgrade to v0.3.5, run `sudo flownote-setup`, then select **5**. Choose **1** and type `UNINSTALL` to remove the application, menu and service while retaining configuration, token, certificates, history, logs and backups. Choose **2** and type `DELETE` to additionally erase `/etc/flownote`, `/var/lib/flownote` and `/var/backups/flownote`, plus unused dedicated logs/rotation and the standard service account. Purging includes private certificates and all recovery backups and cannot be undone.
 
 Both modes validate and remove only recognized wizard query outbounds/rules from the persistent Xray template, preserving nodes and traffic counters. Matching original backups can restore only unchanged log keys. Candidate-check or Xray-restart failure prevents application deletion; conflicting custom/HTTPS query rules need manual handling. If Xray still uses the dedicated log, its files, rotation and service account remain even during purge. Custom paths, shared log ACLs and system journals are retained. Remove client routing rules first and revoke unused panel API tokens separately.

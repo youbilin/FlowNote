@@ -1,6 +1,6 @@
 [package]
 name = "flownote"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 description = "Traffic self-service for 3x-ui users"
 license = "MIT"

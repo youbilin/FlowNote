@@ -9,7 +9,7 @@
 面向 3x-ui 拼节点用户的轻量流量查询页。无需开启面板订阅，无需用户登录。
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.4-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.5-246852)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust&logoColor=white)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -94,7 +94,7 @@ FlowNote 提供一张只读的流量手记：用户先连接管理员分配的�
 支持 **Linux amd64 / arm64**，自动识别架构，使用预编译静态二进制，不需要在 VPS 上编译 Rust：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.4/install.sh | sudo bash -s -- --version v0.3.4 --setup
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.5/install.sh | sudo bash -s -- --version v0.3.5 --setup
 ```
 
 安装脚本下载固定版本、校验 SHA-256、包内路径和二进制版本，安装程序与 systemd 服务后打开配置菜单。**需要 Python 3（仅使用标准库）；缺少时先执行 `sudo apt-get install -y python3`。** 单独安装不改 Xray；选择菜单配置并确认后，才会合并查询路由并启动服务。安装或升级保留已有配置和数据；活动服务升级会短暂重启，向导应用配置时另有备份与确认。
@@ -102,14 +102,14 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/relea
 想先审阅脚本，或只下载离线包：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.4/install.sh
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.5/install.sh
 less install.sh
-sudo bash install.sh --version v0.3.4 --setup
+sudo bash install.sh --version v0.3.5 --setup
 # 只下载并校验，不安装：
-bash install.sh --version v0.3.4 --download-only ./flownote-download
+bash install.sh --version v0.3.5 --download-only ./flownote-download
 ```
 
-[预编译包及 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.4)。清单用于发现下载损坏，不是独立签名。
+[预编译包及 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.5)。清单用于发现下载损坏，不是独立签名。
 
 ### 交互式配置：已经安装 3x-ui，直接用菜单
 
@@ -139,13 +139,26 @@ sudo flownote-setup
 | 面板地址 | 从 SQLite 读取实际端口、访问路径；面板启用 HTTPS 时要求输入证书可验证的实际地址 |
 | 访问日志 | 优先使用已有绝对路径；未配置时建议 `/var/log/flownote-xray/access.log` |
 
-按提示确认面板地址和日志位置，然后粘贴 **API Token（输入不回显）**，填写一个**真实 client email** 用于核对流量接口权限。Token 是面板 API 凭据，不是登录密码、UUID 或订阅链接；已有 Token 可留空保留。无需开启订阅。
+按提示填写：
+
+| 项目 | 怎么填写 | 用途 |
+|---|---|---|
+| 面板 API 地址 | 本机 HTTP 面板使用 `http://127.0.0.1:实际端口/实际访问路径`；检测正确时直接回车 | FlowNote 向面板读取流量，无需额外拼 `/panel/api` |
+| Xray 访问日志路径 | 不确定时直接回车，默认 `/var/log/flownote-xray/access.log`；向导会创建日志并配置权限 | 将查询连接的来源 IP:端口对应到客户端账号，避免查到其他人的流量 |
+| API Token | 粘贴面板创建的 Token，输入不回显；已有 Token 可留空保留 | 验证面板 API 权限；不是登录密码、UUID 或订阅链接 |
+| 3x-ui 客户端标识（email） | 在 **入站列表 → 展开节点 → 客户端** 复制一个已有客户端的 email 字段，例如 `alice` | 安装时验证流量 API；不要求真实邮箱，也不会发送邮件 |
+
+无需开启订阅。填写的客户端标识只用于安装验证；正式查询时会通过访问日志自动识别各用户。HTTPS 面板必须使用证书对应的真实域名地址。
 
 若提示“未找到持久化 Xray 模板”，先在面板的 **Xray 设置 / 配置** 页保存一次现有配置，再重新运行。向导不会拿面板生成的运行时 `config.json` 覆盖持久化模板。
 
 确认前会检查 Xray 候选配置并显示变更。输入 `y` 后先验证面板接口，再备份并修改数据库中的 Xray 模板这一项，合并专用出站与路由，设置日志权限，启动 FlowNote。原节点、默认出站、面板登录与订阅开关保留；**应用期间 x-ui 会短暂重启，连接可能中断。** 向导生成 HTTP / 历史采样配置，已有 FlowNote 自定义配置会先备份。原日志的地址掩码会关闭，以保留关联账号所需的完整来源 IP:端口。
 
 备份在 `/var/backups/flownote/<时间-随机后缀>/`，仅 root 可读，包含原数据库及已有的 FlowNote 配置 / Token。失败时尝试只恢复 Xray 模板与 FlowNote 配置，不用整库回滚流量统计；已创建的日志文件、ACL 或轮转配置可能保留。备份含敏感信息，请勿上传公开仓库。
+
+v0.3.5 修复首次配置时日志目录尚未创建导致的检查失败：确认应用前使用备份目录内的私有临时访问日志验证配置，确认后创建正式日志，再检查原始候选配置，通过后才重启面板。只有内核明确报告不支持 `finalRules` 字段时，才询问是否去除字段重试。
+
+检查仍失败时，向导会显示可识别的原因和私有诊断文件的完整路径。原始输出保存在提示目录的 `xray-check.stdout.log`、`xray-check.stderr.log`，仅 root 可读；先在服务器本机查看，分享错误前删去账号、UUID、密钥和订阅信息。不要上传完整候选配置。
 
 默认专用日志会生成 `/etc/logrotate.d/flownote-xray`；系统需安装 `logrotate` 才会执行轮转（Debian / Ubuntu：`sudo apt-get install -y logrotate`）。选择已有日志时须自行让轮转后的文件继续可读；需要补 ACL 的环境先安装 `acl`。日志不能放在受服务 `ProtectHome` 限制的 `/root` 或 `/home` 下。
 
@@ -162,7 +175,7 @@ sudo flownote-setup --xui-dir /实际面板目录 --db /实际目录/x-ui.db --c
 
 ### 卸载与清理
 
-运行 `sudo flownote-setup`，选择 **`5. 卸载与清理`**。旧版本没有这个菜单时，先用上面的安装命令升级到 v0.3.4。
+运行 `sudo flownote-setup`，选择 **`5. 卸载与清理`**。旧版本没有这个菜单时，先用上面的安装命令升级到 v0.3.5。
 
 ```text
 卸载与清理

@@ -187,6 +187,104 @@ class Setup(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["env"]["XRAY_LOCATION_ASSET"], str(core.parent))
         self.assertEqual(write.call_args.args[0], self.root / "xray-check.json")
 
+    def test_preflight_uses_private_log_without_mutating_real_path_or_config(self):
+        value = wizard.merged_config(self.template, str(self.root / "missing/access.log"))
+        original = copy.deepcopy(value)
+        with patch.object(wizard, "command"), patch.object(wizard.os, "fchown"):
+            wizard.test_xray(self.root / "xray", value, self.root, stage_access_log=True)
+        checked = json.loads((self.root / "xray-check.json").read_text())
+        self.assertEqual(checked["log"]["access"], str(self.root / "xray-preflight-access.log"))
+        self.assertEqual(checked["log"]["error"], value["log"]["error"])
+        self.assertEqual(value, original)
+        self.assertFalse((self.root / "missing").exists())
+        self.assertEqual((self.root / "xray-preflight-access.log").stat().st_mode & 0o777, 0o600)
+        self.assertEqual((self.root / "xray-check.json").stat().st_mode & 0o777, 0o600)
+
+    def test_real_check_preserves_final_log_path(self):
+        value = wizard.merged_config(self.template, "/var/log/flownote-xray/access.log")
+        with patch.object(wizard, "command"), patch.object(wizard.os, "fchown"):
+            wizard.test_xray(self.root / "xray", value, self.root)
+        self.assertEqual(json.loads((self.root / "xray-check.json").read_text()), value)
+
+    def xray_failure(self, stdout="", stderr=""):
+        failure = wizard.subprocess.CalledProcessError(23, ["xray"], output=stdout, stderr=stderr)
+        with patch.object(wizard, "command", side_effect=failure), patch.object(wizard.os, "fchown"):
+            with self.assertRaises(wizard.XrayCheckError) as raised:
+                wizard.test_xray(self.root / "xray", self.template, self.root)
+        return raised.exception
+
+    def test_raw_xray_error_stays_private_and_out_of_terminal_message(self):
+        stdout = "private fixture-secret: failed to initialize access logger > no such file or directory"
+        stderr = "secret@example.com"
+        error = self.xray_failure(stdout, stderr)
+        self.assertIn("访问日志无法打开", str(error))
+        self.assertIn("23", str(error))
+        self.assertNotIn("fixture-secret", str(error))
+        self.assertNotIn("secret@example.com", str(error))
+        self.assertFalse(error.final_rules_unsupported)
+        for name, content in (("stdout", stdout), ("stderr", stderr)):
+            path = self.root / ("xray-check." + name + ".log")
+            self.assertEqual(path.read_text(), content)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertIn(str(path), str(error))
+
+    def test_final_rules_fallback_only_on_explicit_unsupported_field(self):
+        for detail in ('json: unknown field "finalRules"', "finalRules is not supported"):
+            self.assertTrue(self.xray_failure(detail).final_rules_unsupported)
+        for detail in ('unknown field "id" while parsing finalRules', "invalid finalRules port", "failed to create server"):
+            self.assertFalse(self.xray_failure(detail).final_rules_unsupported)
+
+    def test_other_xray_errors_have_specific_safe_hints(self):
+        self.assertIn("错误日志无法打开", str(self.xray_failure("failed to initialize error logger")))
+        self.assertIn("资源文件缺失", str(self.xray_failure(stderr="failed to open geosite.dat: no such file")))
+
+    def test_setup_does_not_offer_final_rules_fallback_for_other_errors(self):
+        core = self.root / "bin/xray"
+        core.parent.mkdir()
+        (core.parent / "config.json").write_text(self.original)
+        settings = wizard.read_settings(self.db)
+        error = wizard.XrayCheckError("fixture failure")
+        with patch.object(wizard, "discover", return_value=(core.parent.parent, self.db, core, settings, "http://127.0.0.1")), \
+             patch.object(wizard, "check_environment", return_value=None), \
+             patch.object(wizard, "ask", side_effect=["http://127.0.0.1", "/var/log/flownote-xray/access.log", "alice"]), \
+             patch.object(wizard.grp, "getgrnam", return_value=type("Group", (), {"gr_gid": 1})()), \
+             patch.object(wizard.getpass, "getpass", return_value="private-token"), \
+             patch.object(wizard, "BACKUP_ROOT", self.root / "backups"), \
+             patch.object(wizard.os, "chown"), patch.object(wizard.os, "fchown"), \
+             patch.object(wizard, "test_xray", side_effect=error) as check, \
+             patch.object(wizard, "yes") as yes, patch.object(wizard, "apply_changes") as apply:
+            with self.assertRaises(wizard.XrayCheckError):
+                wizard.setup(None)
+        yes.assert_not_called()
+        apply.assert_not_called()
+        self.assertTrue(check.call_args.kwargs["stage_access_log"])
+        self.assertEqual(self.setting("xrayTemplateConfig"), self.original)
+
+    def test_setup_only_removes_final_rules_after_explicit_unsupported_error(self):
+        core = self.root / "bin/xray"
+        core.parent.mkdir()
+        (core.parent / "config.json").write_text(self.original)
+        settings = wizard.read_settings(self.db)
+        error = wizard.XrayCheckError("fixture unsupported finalRules", final_rules_unsupported=True)
+        with patch.object(wizard, "discover", return_value=(core.parent.parent, self.db, core, settings, "http://127.0.0.1")), \
+             patch.object(wizard, "check_environment", return_value=None), \
+             patch.object(wizard, "ask", side_effect=["http://127.0.0.1", "/var/log/flownote-xray/access.log", "alice"]), \
+             patch.object(wizard.grp, "getgrnam", return_value=type("Group", (), {"gr_gid": 1})()), \
+             patch.object(wizard.getpass, "getpass", return_value="private-token"), \
+             patch.object(wizard, "BACKUP_ROOT", self.root / "backups"), \
+             patch.object(wizard.os, "chown"), patch.object(wizard.os, "fchown"), \
+             patch.object(wizard, "test_xray", side_effect=[error, None]) as check, \
+             patch.object(wizard, "yes", side_effect=[True, False]) as yes, patch.object(wizard, "apply_changes") as apply:
+            wizard.setup(None)
+        self.assertEqual(yes.call_count, 2)
+        self.assertEqual(check.call_count, 2)
+        retried = check.call_args.args[1]
+        self.assertNotIn("finalRules", retried["outbounds"][2]["settings"])
+        self.assertIn("finalRules", check.call_args_list[0].args[1]["outbounds"][2]["settings"])
+        apply.assert_not_called()
+        self.assertTrue(check.call_args.kwargs["stage_access_log"])
+        self.assertEqual(self.setting("xrayTemplateConfig"), self.original)
+
     def apply_fixture(self, fail_at=None, interrupt=False):
         directory = self.root / "backup"
         directory.mkdir()
@@ -206,7 +304,7 @@ class Setup(unittest.TestCase):
                     raise KeyboardInterrupt()
                 raise wizard.subprocess.CalledProcessError(1, args)
         patches = (patch.object(wizard, "command", side_effect=run),
-                   patch.object(wizard, "grant_log"), patch.object(wizard, "wait_service"),
+                   patch.object(wizard, "grant_log", side_effect=lambda *args: calls.append(["grant_log"])), patch.object(wizard, "wait_service"),
                    patch.object(wizard.subprocess, "run", return_value=wizard.subprocess.CompletedProcess([], 0)),
                    patch.object(wizard.os, "fchown"))
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
@@ -214,11 +312,11 @@ class Setup(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     wizard.apply_changes(self.db, directory, self.original, replacement,
                                          config, "new config", token, "new token", 1,
-                                         "/var/log/access.log", "alice", self.root / "xray")
+                                         "/var/log/access.log", "alice", self.root / "xray", json.loads(replacement))
             else:
                 wizard.apply_changes(self.db, directory, self.original, replacement,
                                      config, "new config", token, "new token", 1,
-                                     "/var/log/access.log", "alice", self.root / "xray")
+                                     "/var/log/access.log", "alice", self.root / "xray", json.loads(replacement))
         return directory, config, token, calls, replacement
 
     def test_full_apply_keeps_node_settings_and_enables_service(self):
@@ -231,7 +329,19 @@ class Setup(unittest.TestCase):
         self.assertEqual((directory / "token.before").stat().st_mode & 0o777, 0o600)
         self.assertEqual(calls[-1], ["systemctl", "enable", "flownote"])
         self.assertLess(next(i for i,c in enumerate(calls) if "--check-panel" in c), calls.index(["systemctl", "stop", "x-ui"]))
+        self.assertLess(next(i for i,c in enumerate(calls) if "-test" in c), calls.index(["systemctl", "stop", "x-ui"]))
+        self.assertLess(calls.index(["grant_log"]), next(i for i,c in enumerate(calls) if "-test" in c))
+        checked = json.loads((directory / "xray-check.json").read_text())
+        self.assertEqual(checked["log"]["access"], "/var/log/access.log")
         self.assertFalse(any("new token" in " ".join(c) for c in calls))
+
+    def test_final_xray_check_failure_never_stops_xui_or_writes_template(self):
+        directory, config, token, calls, _ = self.apply_fixture("-test")
+        self.assertNotIn(["systemctl", "stop", "x-ui"], calls)
+        self.assertEqual(self.setting("xrayTemplateConfig"), self.original)
+        self.assertEqual(config.read_text(), "old config")
+        self.assertEqual(token.read_text(), "old token")
+        self.assertTrue((directory / "xray-check.stdout.log").exists())
 
     def test_panel_failure_restores_files_without_stopping_xui(self):
         directory, config, token, calls, _ = self.apply_fixture("--check-panel")
