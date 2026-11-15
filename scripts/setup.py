@@ -23,6 +23,8 @@ KEYS = ("webPort", "webListen", "webBasePath", "webCertFile", "webKeyFile", "web
 BACKUP_ROOT = Path("/var/backups/flownote")
 QUERY = "traffic-query"
 BLOCK = "flownote-block"
+CONFIG_PATH = Path("/etc/flownote/config.toml")
+TOKEN_PATH = Path("/etc/flownote/token")
 
 
 def command(args, **kwargs):
@@ -78,15 +80,97 @@ def validate_url(value):
     return value.rstrip("/")
 
 
+def certificate_host(path):
+    if not path or not Path(path).is_file() or not shutil.which("openssl"):
+        return None
+    try:
+        output = command(["openssl", "x509", "-in", str(path), "-noout", "-ext", "subjectAltName"]).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    hosts = set(re.findall(r"DNS:([a-zA-Z0-9.-]+)(?=,|\s|$)", output))
+    return next(iter(hosts)) if len(hosts) == 1 else None
+
+
 def panel_default(settings):
     port = int(settings.get("webPort") or "2053")
     base = settings.get("webBasePath") or "/"
     base = "/" + base.strip("/") if base.strip("/") else ""
     listen = settings.get("webListen") or ""
-    if settings.get("webCertFile") or settings.get("webKeyFile") or listen not in ("", "0.0.0.0", "127.0.0.1", "::", "::1"):
-        return None  # Never guess a certificate hostname or downgrade a TLS panel.
+    if settings.get("webCertFile") or settings.get("webKeyFile"):
+        host = (settings.get("webDomain") or "").strip() or certificate_host(settings.get("webCertFile"))
+        if not host or not re.fullmatch(r"[a-zA-Z0-9.-]+", host):
+            return None
+        return validate_url("https://{}:{}{}".format(host, port, base))
+    if listen not in ("", "0.0.0.0", "127.0.0.1", "::", "::1"):
+        return None
     host = "[::1]" if listen == "::1" else "127.0.0.1"
     return validate_url("http://{}:{}{}".format(host, port, base))
+
+
+def config_field(text, section, key):
+    # Read only the strings we own; preserve all other TOML verbatim. No new dependency.
+    header = re.compile(r"^\s*\[([^]\n]+)\]\s*(?:#.*)?$")
+    current = None
+    found = []
+    for line in text.splitlines():
+        match = header.match(line)
+        if match:
+            current = match[1]
+        elif current == section:
+            match = re.match(r"^\s*" + re.escape(key) + r"\s*=\s*(.*)$", line)
+            if match:
+                value = re.match(r"(\"(?:[^\"\\]|\\.)*\"|'[^']*')\s*(?:#.*)?$", match[1])
+                if not value:
+                    raise ValueError("无法自动读取 [" + section + "] " + key + "，请检查配置字符串")
+                quoted = value[1]
+                found.append(json.loads(quoted) if quoted.startswith('"') else quoted[1:-1])
+    if len(found) > 1:
+        raise ValueError("配置项重复: [" + section + "] " + key)
+    return found[0] if found else None
+
+
+def set_config_field(text, section, key, value):
+    # Validate uniqueness and supported scalar syntax before changing anything.
+    current = config_field(text, section, key)
+    if current == value:
+        return text
+    lines = text.splitlines(keepends=True)
+    inside = False
+    for index, line in enumerate(lines):
+        header = re.match(r"^\s*\[([^]\n]+)\]\s*(?:#.*)?$", line.strip())
+        if header:
+            if inside:
+                lines.insert(index, key + " = " + json.dumps(value, ensure_ascii=False) + "\n")
+                return "".join(lines)
+            inside = header[1] == section
+        elif inside and re.match(r"^\s*" + re.escape(key) + r"\s*=", line):
+            lines[index] = key + " = " + json.dumps(value, ensure_ascii=False) + "\n"
+            return "".join(lines)
+    prefix = "".join(lines).rstrip("\n") + "\n"
+    return prefix + ("" if inside else "[" + section + "]\n") + key + " = " + json.dumps(value, ensure_ascii=False) + "\n"
+
+
+def setup_configuration(existing, base_url, access):
+    if not existing:
+        return configuration(base_url, access)
+    protocol = config_field(existing, "server", "protocol")
+    domain = config_field(existing, "server", "domain")
+    if protocol != "http" or domain != "6.6.6.6":
+        raise ValueError("当前不是 6.6.6.6 HTTP 查询配置；请保留现有入口并按手动指南调整")
+    if (config_field(existing, "server", "listen") != "127.0.0.1:8686"
+            or config_field(existing, "xray", "outbound_tag") != QUERY):
+        raise ValueError("当前监听地址 / 出站标签为自定义值，请按手动指南调整")
+    result = set_config_field(existing, "panel", "base_url", base_url)
+    return set_config_field(result, "xray", "access_log", access)
+
+
+def query_ready(value, access, final_rules):
+    verified = merged_config(value, access, final_rules)
+    api_rule = {"type": "field", "inboundTag": ["api"], "outboundTag": "api"}
+    rules = [rule for rule in value.get("routing", {}).get("rules", []) if rule != api_rule]
+    # Compare only owned settings. The panel can inject a management API rule.
+    return (value["outbounds"] == verified["outbounds"] and value.get("log") == verified["log"]
+            and rules[:2] == verified["routing"]["rules"][:2])
 
 
 def merged_config(original, access_log, final_rules=True):
@@ -437,24 +521,14 @@ def reconcile_log(core, config_path, config, group, directory, expected):
         raise ValueError("面板重新生成的 Xray 配置未启用文件访问日志")
     query = next(o for o in expected["outbounds"] if o.get("tag") == QUERY)
     final_rules = "finalRules" in query["settings"]
-    verified = merged_config(actual, access, final_rules)
-    # The panel may prepend its management API route on regeneration.
-    # That rule targets only the reserved API inbound, not user queries.
-    api_rule = {"type": "field", "inboundTag": ["api"], "outboundTag": "api"}
-    rules = [rule for rule in actual.get("routing", {}).get("rules", []) if rule != api_rule]
-    if (actual["outbounds"] != verified["outbounds"] or actual["log"] != verified["log"]
-            or rules[:2] != verified["routing"]["rules"][:2]):
+    if not query_ready(actual, access, final_rules):
         raise ValueError("面板未保留查询路由、出站或完整来源地址，停止启动 FlowNote")
     before = access_path(expected.get("log", {}).get("access"))
     if access != before:
         # Reuse the effective panel log, rather than starting another logger or service.
         ensure_tools(access)
         grant_log(access, group, directory)
-        old = "access_log = " + json.dumps(before, ensure_ascii=False)
-        new = "access_log = " + json.dumps(access, ensure_ascii=False)
-        if config.count(old) != 1:
-            raise ValueError("无法唯一同步 FlowNote 日志路径")
-        config = config.replace(old, new, 1)
+        config = set_config_field(config, "xray", "access_log", access)
         write_private(config_path, config, group)
         write_private(directory / "config.after.toml", config)
         print("已同步面板实际访问日志: " + access)
@@ -473,6 +547,14 @@ def setup(args):
     template = load_json(original)
     runtime = load_json((core.parent / "config.json").read_text(encoding="utf-8"))
     advanced = getattr(args, "advanced", False)
+    if CONFIG_PATH.is_symlink():
+        raise ValueError("配置文件不能为符号链接")
+    existing = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.is_file() else ""
+    if not default and existing:
+        saved_url = config_field(existing, "panel", "base_url")
+        if saved_url and (not settings.get("webCertFile") and not settings.get("webKeyFile")
+                          or urlsplit(saved_url).scheme == "https"):
+            default = validate_url(saved_url)
     base_url = validate_url(ask("面板 API 地址（包含面板访问路径）", default or "")
                             if advanced or not default else default)
     access = choose_access(runtime, template)
@@ -483,9 +565,16 @@ def setup(args):
     print("面板地址: " + base_url)
     print("自动使用 Xray 访问日志: " + access)
     group = grp.getgrnam("flownote").gr_gid
-    token_path = Path("/etc/flownote/token")
-    token = getpass.getpass("面板 API Token（不回显；留空保留已有 Token）: ").strip()
-    if not token and (not token_path.is_file() or token_path.is_symlink()):
+    token_path = Path(config_field(existing, "panel", "token_file") or TOKEN_PATH)
+    if not token_path.is_absolute() or token_path.is_symlink():
+        raise ValueError("Token 文件必须为绝对路径且不能是符号链接")
+    inline_token = config_field(existing, "panel", "token")
+    if not advanced and (token_path.is_file() or inline_token):
+        token = ""
+        print("复用已保存的 API Token。")
+    else:
+        token = getpass.getpass("面板 API Token（不回显；留空保留已有 Token）: ").strip()
+    if not token and not inline_token and (not token_path.is_file() or token_path.is_symlink()):
         raise ValueError("首次配置需要 API Token；请在面板创建后粘贴，不是登录密码或订阅链接")
     if any(c in token for c in "\r\n\0"):
         raise ValueError("Token 不能含换行或 NUL")
@@ -496,9 +585,17 @@ def setup(args):
         print("已自动选择已有客户端用于验证流量 API。")
     if not email:
         raise ValueError("请填写面板里一个已有客户端的 email 标识，用于验证流量 API；不是面板登录账号")
-    final_rules = True
+    previous_query = next((o for o in runtime.get("outbounds", []) if o.get("tag") == QUERY), None)
+    final_rules = previous_query is None or "finalRules" in previous_query.get("settings", {})
     merged = merged_config(template, access, final_rules)
     run_merged = merged_config(runtime, access, final_rules)
+    # An unchanged deployment needs neither a kernel check nor a service reload.
+    restart_xui = not query_ready(runtime, access, final_rules)
+    config = setup_configuration(existing, base_url, access)
+    if token:
+        config = set_config_field(config, "panel", "token_file", str(token_path))
+        if inline_token:
+            config = set_config_field(config, "panel", "token", "")
     root = BACKUP_ROOT
     if root.is_symlink():
         raise ValueError("备份目录不能为符号链接")
@@ -508,7 +605,8 @@ def setup(args):
     directory = Path(tempfile.mkdtemp(prefix=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ-"), dir=str(root)))
     write_private(directory / "xray-template.after.json", json.dumps(merged, ensure_ascii=False, indent=2))
     try:
-        test_xray(core, run_merged, directory, stage_access_log=True)
+        if restart_xui:
+            test_xray(core, run_merged, directory, stage_access_log=True)
     except XrayCheckError as exc:
         if not exc.final_rules_unsupported:
             raise
@@ -519,13 +617,13 @@ def setup(args):
         run_merged = merged_config(runtime, access, False)
         test_xray(core, run_merged, directory, stage_access_log=True)
         write_private(directory / "xray-template.after.json", json.dumps(merged, ensure_ascii=False, indent=2))
-    config = configuration(base_url, access)
     write_private(directory / "config.after.toml", config)
     print("\n将保存 HTTP 配置、Token 和日志权限；追加两个出站及两条精确 IP 路由。")
     print("原默认出站、节点、订阅开关与面板登录设置保留。")
     print("访问日志保留完整来源 IP:端口，用于账号关联；不做地址掩码。")
-    print("使用轻量配置，历史曲线默认关闭；已有配置先备份。")
-    print("会短暂停止 / 启动 x-ui（节点连接可能断开），并启动 FlowNote。")
+    print("保留已有显示、历史和性能设置；新配置默认关闭历史曲线。")
+    print("需要首次加载 / 修复 Xray 路由，将短暂重启 x-ui（节点可能断开）。" if restart_xui
+          else "Xray 查询路由已就绪；本次不重启 3x-ui / Xray。")
     print("变更预览 / 备份目录:", directory)
     print("如使用现有日志，只对该日志授予 ACL；日志轮转仍需保持权限。")
     packages = missing_tools(access)
@@ -535,61 +633,132 @@ def setup(args):
         print("已取消，面板和服务未修改。预览文件已保留。")
         return
     apply_changes(db, directory, original, json.dumps(merged, ensure_ascii=False),
-                  Path("/etc/flownote/config.toml"), config, token_path, token,
-                  group, access, email, core, run_merged)
+                  CONFIG_PATH, config, token_path, token,
+                  group, access, email, core, run_merged, restart_xui=restart_xui)
     print("\n服务已启动。还需在客户端加规则，并完成双账号查询验收：")
     client_rules()
 
 
 def apply_changes(db, directory, original, replacement, config_path, config,
-                  token_path, token, group, access, email, core, runtime_config):
+                  token_path, token, group, access, email, core, runtime_config, *, restart_xui=True):
     for path in (config_path, token_path):
         if path.is_symlink():
             raise ValueError("拒绝替换符号链接配置 / Token")
         if path.exists():
             shutil.copy2(path, directory / (path.name + ".before"))
             os.chmod(directory / (path.name + ".before"), 0o600)
-    stopped = updated = False
+    updated = reloaded = files_changed = flow_reloaded = False
+    previous_config = config_path.read_text(encoding="utf-8") if config_path.is_file() else None
+    config_changed = previous_config != config
+    token_changed = bool(token) and (not token_path.is_file() or token_path.read_text(encoding="utf-8").strip() != token)
+    template_changed = load_json(original) != load_json(replacement)
     was_active = subprocess.run(["systemctl", "is-active", "--quiet", "flownote"], timeout=5).returncode == 0
+    stage = "验证面板 URL / Token / 流量接口"
     try:
-        ensure_tools(access)
-        # Validate panel before touching the running x-ui service.
+        # Verify in root-private staging files; do not replace working configuration.
+        probe = directory / "panel-check.toml"
+        probe_token = directory / "panel-check.token"
+        staged = config
         if token:
-            write_private(token_path, token + "\n", group)
-        write_private(config_path, config, group)
-        command(["runuser", "-u", "flownote", "--", "/usr/local/bin/flownote", str(config_path), "--check-panel", email])
+            write_private(probe_token, token + "\n")
+            staged = set_config_field(staged, "panel", "token_file", str(probe_token))
+        write_private(probe, staged)
+        try:
+            command(["/usr/local/bin/flownote", str(probe), "--check-panel", email])
+        finally:
+            if probe_token.exists():
+                probe_token.unlink()
+        stage = "准备日志工具与读取权限"
+        ensure_tools(access)
         grant_log(access, group, directory)
-        # Recheck the exact runtime candidate with its real log before stopping x-ui.
-        test_xray(core, runtime_config, directory)
-        stopped = True
-        command(["systemctl", "stop", "x-ui"])
-        updated = True
-        snapshot_and_update(db, directory / "x-ui.before.db", original, replacement)
-        command(["systemctl", "start", "x-ui"])
-        wait_service("x-ui", core)
+        if restart_xui:
+            stage = "检查 Xray 正式候选配置"
+            test_xray(core, runtime_config, directory)
+        else:
+            stage = "核对运行中的查询路由"
+            actual = load_json((core.parent / "config.json").read_text(encoding="utf-8"))
+            query = next(o for o in runtime_config["outbounds"] if o.get("tag") == QUERY)
+            if not query_ready(actual, access, "finalRules" in query["settings"]):
+                raise ValueError("运行配置已改变，请重新运行向导")
+        stage = "保存面板查询模板"
+        if template_changed:
+            snapshot_and_update(db, directory / "x-ui.before.db", original, replacement)
+            updated = True
+        elif read_settings(db).get("xrayTemplateConfig") != original:
+            raise ValueError("面板模板已被其他操作修改，请重新运行向导")
+        if restart_xui:
+            stage = "重新加载 x-ui / Xray"
+            reloaded = True
+            # A single restart replaces the old stop/write/start window.
+            command(["systemctl", "restart", "x-ui"])
+            wait_service("x-ui", core)
+        stage = "保存 FlowNote 配置"
+        if config_changed or token_changed:
+            files_changed = True
+            if token_changed:
+                write_private(token_path, token + "\n", group)
+            if config_changed:
+                write_private(config_path, config, group)
+        stage = "核对面板实际日志与查询路由"
+        files_changed = True  # Reconciliation may update the effective log path.
         reconcile_log(core, config_path, config, group, directory, runtime_config)
-        command(["systemctl", "restart", "flownote"])
-        wait_service("flownote")
+        command(["runuser", "-u", "flownote", "--", "test", "-r", str(config_path)])
+        if config_field(config, "panel", "token_file"):
+            command(["runuser", "-u", "flownote", "--", "test", "-r", str(token_path)])
+        effective_changed = config_path.read_text(encoding="utf-8") != previous_config
+        if config_changed or token_changed or effective_changed or not was_active:
+            stage = "启动 FlowNote"
+            flow_reloaded = True
+            command(["systemctl", "restart" if was_active else "start", "flownote"])
+            wait_service("flownote")
+        else:
+            print("FlowNote 配置一致，保持运行。")
+        stage = "启用 FlowNote 开机启动"
         command(["systemctl", "enable", "flownote"])
     except BaseException as exc:
-        if isinstance(exc, XrayCheckError):
-            print(str(exc), file=sys.stderr)
+        # Keep diagnostics private, while always attempting service recovery even if
+        # restoring a concurrently edited template fails.
         try:
-            if updated:
-                command(["systemctl", "stop", "x-ui"])
+            for name in ("stdout", "stderr"):
+                text = getattr(exc, name, "") or ""
+                if isinstance(text, bytes):
+                    text = text.decode("utf-8", errors="replace")
+                write_private(directory / ("apply." + name + ".log"), text)
+            write_private(directory / "apply.failure.json", json.dumps({
+                "stage": stage, "error_type": type(exc).__name__, "detail": str(exc),
+                "returncode": getattr(exc, "returncode", None)}, ensure_ascii=False))
+        except (OSError, ValueError):
+            pass  # A diagnostic write failure must never prevent recovery.
+        recovery = []
+        if updated:
+            try:
                 restore_setting(db, replacement, original)
-            if stopped:
-                command(["systemctl", "start", "x-ui"])
-            for path in (config_path, token_path):
-                previous = directory / (path.name + ".before")
-                if previous.exists():
-                    write_private(path, previous.read_text(encoding="utf-8"), group)
-                elif path.exists():
-                    path.unlink()
-            command(["systemctl", "restart" if was_active else "stop", "flownote"])
-        except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
-            print("自动回退未全部成功，请检查 x-ui / flownote 日志与备份。", file=sys.stderr)
-        raise ValueError("应用失败，已尝试恢复原 Xray 设置和 FlowNote 配置；日志文件 / ACL / 轮转配置可能保留。备份: " + str(directory)) from None
+            except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+                recovery.append("面板模板恢复失败，未覆盖其他修改")
+        if reloaded:
+            try:
+                command(["systemctl", "restart", "x-ui"])
+                wait_service("x-ui", core)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                recovery.append("x-ui 恢复启动失败，请执行 systemctl status x-ui")
+        if files_changed:
+            try:
+                for path in (config_path, token_path):
+                    previous = directory / (path.name + ".before")
+                    if previous.exists():
+                        write_private(path, previous.read_text(encoding="utf-8"), group)
+                    elif path.exists():
+                        path.unlink()
+            except (OSError, ValueError):
+                recovery.append("FlowNote 配置恢复失败")
+        if flow_reloaded:
+            try:
+                command(["systemctl", "restart" if was_active else "stop", "flownote"])
+            except (OSError, subprocess.SubprocessError):
+                recovery.append("FlowNote 服务恢复失败")
+        detail = "；".join(recovery) if recovery else "未修改的服务保持运行；已修改的配置已执行回退"
+        raise ValueError("应用失败（阶段：" + stage + "）。" + detail + "。诊断目录: " + str(directory)
+                         + "；查看 apply.failure.json / apply.stderr.log，勿公开 Token 或节点密钥。日志权限和已安装系统包可能保留。") from None
 
 
 # Uninstall operations stay in the same stdlib script so the menu can remove itself.

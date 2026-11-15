@@ -437,9 +437,8 @@ class Setup(unittest.TestCase):
         self.assertEqual(config.read_text(), "old config")
         self.assertEqual(token.read_text(), "old token")
         self.assertEqual(self.setting("xrayTemplateConfig"), self.original)
-        self.assertEqual(calls.count(["systemctl", "start", "x-ui"]), 2)
-        self.assertGreater(calls.index(["systemctl", "restart", "flownote"]),
-                           max(i for i, c in enumerate(calls) if c == ["systemctl", "start", "x-ui"]))
+        self.assertEqual(calls.count(["systemctl", "restart", "x-ui"]), 2)
+        self.assertNotIn(["systemctl", "restart", "flownote"], calls)
 
     def apply_fixture(self, fail_at=None, interrupt=False):
         directory = self.root / "backup"
@@ -469,11 +468,11 @@ class Setup(unittest.TestCase):
             if fail_at:
                 with self.assertRaises(ValueError):
                     wizard.apply_changes(self.db, directory, self.original, replacement,
-                                         config, "new config", token, "new token", 1,
+                                         config, wizard.configuration("http://127.0.0.1:39876/private-path", "/var/log/access.log"), token, "new token", 1,
                                          "/var/log/access.log", "alice", self.root / "xray", json.loads(replacement))
             else:
                 wizard.apply_changes(self.db, directory, self.original, replacement,
-                                     config, "new config", token, "new token", 1,
+                                     config, wizard.configuration("http://127.0.0.1:39876/private-path", "/var/log/access.log"), token, "new token", 1,
                                      "/var/log/access.log", "alice", self.root / "xray", json.loads(replacement))
         return directory, config, token, calls, replacement
 
@@ -481,13 +480,13 @@ class Setup(unittest.TestCase):
         directory, config, token, calls, replacement = self.apply_fixture()
         self.assertEqual(self.setting("xrayTemplateConfig"), replacement)
         self.assertEqual(self.setting("subEnable"), "false")
-        self.assertEqual(config.read_text(), "new config")
+        self.assertEqual(config.read_text(), wizard.configuration("http://127.0.0.1:39876/private-path", "/var/log/access.log"))
         self.assertEqual(token.read_text(), "new token\n")
         self.assertEqual(token.stat().st_mode & 0o777, 0o640)
         self.assertEqual((directory / "token.before").stat().st_mode & 0o777, 0o600)
         self.assertEqual(calls[-1], ["systemctl", "enable", "flownote"])
-        self.assertLess(next(i for i,c in enumerate(calls) if "--check-panel" in c), calls.index(["systemctl", "stop", "x-ui"]))
-        self.assertLess(next(i for i,c in enumerate(calls) if "-test" in c), calls.index(["systemctl", "stop", "x-ui"]))
+        self.assertLess(next(i for i,c in enumerate(calls) if "--check-panel" in c), calls.index(["systemctl", "restart", "x-ui"]))
+        self.assertLess(next(i for i,c in enumerate(calls) if "-test" in c), calls.index(["systemctl", "restart", "x-ui"]))
         self.assertLess(calls.index(["grant_log"]), next(i for i,c in enumerate(calls) if "-test" in c))
         checked = json.loads((directory / "xray-check.json").read_text())
         self.assertEqual(checked["log"]["access"], "/var/log/access.log")
@@ -515,13 +514,190 @@ class Setup(unittest.TestCase):
         self.assertEqual(token.read_text(), "old token")
         self.assertEqual(self.setting("xrayTemplateConfig"), self.original)
         self.assertTrue((directory / "x-ui.before.db").exists())
-        self.assertEqual(calls.count(["systemctl", "start", "x-ui"]), 2)
+        self.assertEqual(calls.count(["systemctl", "restart", "x-ui"]), 2)
 
     def test_interrupt_after_database_update_also_rolls_back(self):
         _, config, token, _, _ = self.apply_fixture("restart flownote", interrupt=True)
         self.assertEqual(self.setting("xrayTemplateConfig"), self.original)
         self.assertEqual(config.read_text(), "old config")
         self.assertEqual(token.read_text(), "old token")
+
+    def test_https_panel_domain_and_unique_certificate_host(self):
+        settings = {"webPort": "8443", "webBasePath": "/admin/", "webCertFile": "cert.pem", "webDomain": "panel.example.com"}
+        self.assertEqual(wizard.panel_default(settings), "https://panel.example.com:8443/admin")
+        settings.pop("webDomain")
+        cert = self.root / "cert.pem"
+        cert.touch()
+        settings["webCertFile"] = str(cert)
+        with patch.object(wizard.shutil, "which", return_value="openssl"), patch.object(wizard, "command") as command:
+            command.return_value.stdout = "X509v3 Subject Alternative Name:\n DNS:panel.example.com\n"
+            self.assertEqual(wizard.panel_default(settings), "https://panel.example.com:8443/admin")
+            command.return_value.stdout = "DNS:a.example.com, DNS:b.example.com"
+            self.assertIsNone(wizard.panel_default(settings))
+            command.return_value.stdout = "DNS:*.example.com"
+            self.assertIsNone(wizard.panel_default(settings))
+
+    def test_configuration_preserves_custom_history_display_and_limits(self):
+        original = wizard.configuration("http://127.0.0.1:39876/private-path", "/old.log")
+        original = original.replace("enabled = false", "enabled = true") + '\n[limits]\nmax_connections = 12\n'
+        updated = wizard.setup_configuration(original, "http://127.0.0.1:2053/new", "/actual.log")
+        self.assertIn("enabled = true", updated)
+        self.assertIn("max_connections = 12", updated)
+        self.assertIn('title = "流量笺"', updated)
+        self.assertEqual(wizard.config_field(updated, "panel", "base_url"), "http://127.0.0.1:2053/new")
+        self.assertEqual(wizard.config_field(updated, "xray", "access_log"), "/actual.log")
+        self.assertEqual(wizard.setup_configuration(updated, "http://127.0.0.1:2053/new", "/actual.log"), updated)
+
+    def test_configuration_rejects_custom_entry_before_mutation(self):
+        text = wizard.configuration("http://127.0.0.1:2053", "/access.log")
+        for old, new in [('protocol = "http"', 'protocol = "https"'), ('127.0.0.1:8686', '127.0.0.1:9999'), ('traffic-query', 'custom-query')]:
+            with self.subTest(new=new), self.assertRaises(ValueError):
+                wizard.setup_configuration(text.replace(old, new), "http://127.0.0.1:2053", "/access.log")
+
+    def test_config_fields_preserve_comments_and_reject_duplicates(self):
+        text = "[panel]\nbase_url = 'http://127.0.0.1:2053' # keep\n[history]\nenabled = true\n"
+        self.assertEqual(wizard.set_config_field(text, "panel", "base_url", "http://127.0.0.1:2053"), text)
+        changed = wizard.set_config_field(text, "panel", "token_file", "/private/token")
+        self.assertIn("# keep", changed)
+        self.assertIn("enabled = true", changed)
+        self.assertEqual(wizard.config_field(changed, "panel", "token_file"), "/private/token")
+        with self.assertRaises(ValueError):
+            wizard.config_field('[panel]\nbase_url = "a"\nbase_url = "b"', "panel", "base_url")
+
+    def test_query_ready_keeps_legacy_final_rules_and_checks_order(self):
+        value = wizard.merged_config(self.template, "/access.log", False)
+        value["routing"]["rules"].insert(0, {"type": "field", "inboundTag": ["api"], "outboundTag": "api"})
+        self.assertTrue(wizard.query_ready(value, "/access.log", False))
+        self.assertFalse(wizard.query_ready(value, "/different.log", False))
+        value["routing"]["rules"].insert(0, {"type": "field", "network": "tcp", "outboundTag": "direct"})
+        self.assertFalse(wizard.query_ready(value, "/access.log", False))
+
+    def no_reload_fixture(self, change=None, *, active=True, fail=False, reconcile_failure=False):
+        directory = self.root / "backup"
+        directory.mkdir()
+        config, token = self.root / "config.toml", self.root / "token"
+        before = wizard.set_config_field(wizard.configuration("http://127.0.0.1:39876/private-path", "/access.log"), "panel", "token_file", str(token))
+        config.write_text(before)
+        token.write_text("existing-token\n")
+        after = wizard.set_config_field(before, "panel", "base_url", "http://127.0.0.1:2053") if change == "url" else before
+        entered = "new-token" if change == "token" else ""
+        ready = wizard.merged_config(self.template, "/access.log", False)
+        (self.root / "config.json").write_text(json.dumps(ready))
+        replacement = json.dumps(ready)
+        if change != "template":
+            with wizard.connection(self.db) as conn:
+                conn.execute("UPDATE settings SET value=? WHERE key='xrayTemplateConfig'", (replacement,))
+        original = self.setting("xrayTemplateConfig")
+        calls = []
+        def run(args, **kwargs):
+            calls.append(args)
+            if fail and "--check-panel" in args:
+                raise wizard.subprocess.CalledProcessError(1, args, stderr="private diagnostic")
+        def reconcile(*args):
+            if reconcile_failure:
+                wizard.write_private(config, "temporary effective config", 1)
+                raise ValueError("fixture runtime mismatch")
+        with patch.object(wizard, "command", side_effect=run), patch.object(wizard, "ensure_tools"), \
+             patch.object(wizard, "grant_log"), patch.object(wizard, "wait_service"), \
+             patch.object(wizard, "reconcile_log", side_effect=reconcile), patch.object(wizard.os, "fchown"), \
+             patch.object(wizard.subprocess, "run", return_value=wizard.subprocess.CompletedProcess([], 0 if active else 3)):
+            if fail or reconcile_failure:
+                with self.assertRaisesRegex(ValueError, "阶段"):
+                    wizard.apply_changes(self.db, directory, original, replacement, config, after, token, entered, 1,
+                                         "/access.log", "alice", self.root / "xray", ready, restart_xui=False)
+            else:
+                wizard.apply_changes(self.db, directory, original, replacement, config, after, token, entered, 1,
+                                     "/access.log", "alice", self.root / "xray", ready, restart_xui=False)
+        self.assertFalse(any(c[:2] == ["systemctl", "stop"] and c[-1] == "x-ui" for c in calls))
+        self.assertFalse(any(c[:2] == ["systemctl", "restart"] and c[-1] == "x-ui" for c in calls))
+        self.assertFalse(any("-test" in c for c in calls))
+        self.assertFalse((directory / "panel-check.token").exists())
+        return directory, config, token, calls, before
+
+    def test_identical_apply_does_not_restart_either_service(self):
+        _, config, token, calls, before = self.no_reload_fixture()
+        self.assertEqual(config.read_text(), before)
+        self.assertEqual(token.read_text(), "existing-token\n")
+        self.assertFalse(any(c[:2] in (["systemctl", "restart"], ["systemctl", "start"]) for c in calls))
+
+    def test_token_only_change_restarts_only_flownote(self):
+        _, _, token, calls, _ = self.no_reload_fixture("token")
+        self.assertEqual(token.read_text(), "new-token\n")
+        self.assertIn(["systemctl", "restart", "flownote"], calls)
+        self.assertFalse(any("new-token" in " ".join(c) for c in calls))
+
+    def test_url_only_change_restarts_only_flownote(self):
+        _, config, _, calls, _ = self.no_reload_fixture("url")
+        self.assertEqual(wizard.config_field(config.read_text(), "panel", "base_url"), "http://127.0.0.1:2053")
+        self.assertIn(["systemctl", "restart", "flownote"], calls)
+
+    def test_inactive_flownote_starts_without_xui_reload(self):
+        _, _, _, calls, _ = self.no_reload_fixture(active=False)
+        self.assertIn(["systemctl", "start", "flownote"], calls)
+
+    def test_missing_persisted_routes_are_saved_without_runtime_reload(self):
+        directory, _, _, calls, _ = self.no_reload_fixture("template")
+        self.assertTrue((directory / "x-ui.before.db").is_file())
+        self.assertTrue(wizard.query_ready(json.loads(self.setting("xrayTemplateConfig")), "/access.log", False))
+        self.assertNotIn(["systemctl", "restart", "flownote"], calls)
+
+    def test_bad_api_changes_no_installed_files_or_services(self):
+        directory, config, token, calls, before = self.no_reload_fixture("token", fail=True)
+        self.assertEqual(config.read_text(), before)
+        self.assertEqual(token.read_text(), "existing-token\n")
+        self.assertFalse(any(c[0] == "systemctl" for c in calls))
+        self.assertIn("private diagnostic", (directory / "apply.stderr.log").read_text())
+        self.assertEqual((directory / "apply.failure.json").stat().st_mode & 0o777, 0o600)
+
+    def test_reconcile_mutation_failure_restores_unchanged_configuration(self):
+        _, config, _, calls, before = self.no_reload_fixture(reconcile_failure=True)
+        self.assertEqual(config.read_text(), before)
+        self.assertNotIn(["systemctl", "restart", "flownote"], calls)
+
+    def test_repeat_setup_reuses_token_url_and_legacy_runtime_without_check(self):
+        base = self.root / "panel"
+        base.mkdir()
+        core = base / "xray"
+        core.touch()
+        ready = wizard.merged_config(self.template, "/access.log", False)
+        (base / "config.json").write_text(json.dumps(ready))
+        config, token = self.root / "config.toml", self.root / "token"
+        token.write_text("private-token")
+        saved = wizard.configuration("https://saved.example.com/proxy", "/access.log").replace("enabled = false", "enabled = true")
+        config.write_text(wizard.set_config_field(saved, "panel", "token_file", str(token)))
+        settings = {"xrayTemplateConfig": json.dumps(ready), "webCertFile": "unavailable.pem"}
+        with patch.object(wizard, "discover", return_value=(base, self.db, core, settings, None)), \
+             patch.object(wizard, "check_environment", return_value=None), \
+             patch.object(wizard, "CONFIG_PATH", config), patch.object(wizard, "BACKUP_ROOT", self.root / "backups"), \
+             patch.object(wizard.grp, "getgrnam", return_value=type("Group", (), {"gr_gid": 1})()), \
+             patch.object(wizard.getpass, "getpass") as prompt, patch.object(wizard, "ask") as ask, \
+             patch.object(wizard.os, "chown"), patch.object(wizard.os, "fchown"), \
+             patch.object(wizard, "missing_tools", return_value=[]), patch.object(wizard, "test_xray") as check, \
+             patch.object(wizard, "yes", return_value=True), patch.object(wizard, "apply_changes") as apply:
+            wizard.setup(wizard.argparse.Namespace(advanced=False))
+        prompt.assert_not_called()
+        ask.assert_not_called()
+        check.assert_not_called()
+        self.assertFalse(apply.call_args.kwargs["restart_xui"])
+        self.assertIn("enabled = true", apply.call_args.args[5])
+        self.assertEqual(apply.call_args.args[7], "")
+        self.assertFalse("finalRules" in json.loads(apply.call_args.args[3])["outbounds"][-2]["settings"])
+
+    def test_template_restore_failure_still_recovers_xui(self):
+        with patch.object(wizard, "restore_setting", side_effect=ValueError("concurrent edit")):
+            _, _, _, calls, _ = self.apply_fixture("reconcile_log")
+        self.assertEqual(calls.count(["systemctl", "restart", "x-ui"]), 2)
+
+    def test_diagnostic_write_failure_still_recovers_xui(self):
+        real_write = wizard.write_private
+        def write(path, *args, **kwargs):
+            if Path(path).name.startswith("apply."):
+                raise OSError("disk full")
+            return real_write(path, *args, **kwargs)
+        with patch.object(wizard, "write_private", side_effect=write):
+            _, _, _, calls, _ = self.apply_fixture("reconcile_log")
+        self.assertEqual(calls.count(["systemctl", "restart", "x-ui"]), 2)
+        self.assertEqual(self.setting("xrayTemplateConfig"), self.original)
 
     def environment_fixture(self, values=None):
         base = self.root / "panel"

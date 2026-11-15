@@ -1,11 +1,11 @@
-# FlowNote v0.3.6 Linux package
+# FlowNote v0.3.7 Linux package
 
 Static musl binary for Linux amd64 or arm64. Includes HTTP / HTTPS templates, Xray routing fragments, a systemd unit, the Python 3 setup wizard and the MIT license.
 
 Verify the archive against SHA256SUMS from the same release. This detects corruption; it is not an independent signature. Review install.sh, then run:
 
 ```bash
-sudo bash install.sh --version v0.3.6 --setup
+sudo bash install.sh --version v0.3.7 --setup
 # Reopen the installed menu anytime:
 sudo flownote-setup
 # Inspect only:
@@ -14,9 +14,9 @@ sudo flownote-setup --detect
 
 Python 3 is required for the menu; only the standard library is used. Install it first if needed (`sudo apt-get install -y python3` on Debian / Ubuntu). Omitting --setup keeps installation noninteractive and does not modify Xray. Existing settings survive installation; active FlowNote services restart on upgrade.
 
-For a standard local 3x-ui installation, choose 2. Defaults: /usr/local/x-ui, /etc/x-ui/x-ui.db and the architecture-specific Xray executable under bin/. The panel port and base path come from settings, not a hard-coded port. Enter an API token (hidden input) and confirm; an existing client identifier is selected automatically for API validation. Use --advanced to override the detected URL, log or client. A TLS panel requires its verified HTTPS address. Subscriptions may remain disabled. If the Xray template has never been persisted, save the current configuration in the panel Xray settings once and rerun.
+For a standard local 3x-ui installation, choose 2. Defaults: /usr/local/x-ui, /etc/x-ui/x-ui.db and the architecture-specific Xray executable under bin/. The panel port and base path come from settings, not a hard-coded port. On first setup, enter an API token (hidden input) and confirm; later runs reuse it automatically; an existing client identifier is selected automatically for API validation. Use --advanced to override the detected URL, log or client. TLS addresses are inferred from the panel domain or unique concrete certificate hostname, then fall back to a saved HTTPS URL or manual input. Certificate validation stays enabled. Subscriptions may remain disabled. If the Xray template has never been persisted, save the current configuration in the panel Xray settings once and rerun.
 
-The wizard previews and tests the candidate configuration, then asks before applying. It validates the panel, backs up to root-only /var/backups/flownote/, changes only the persisted Xray template, sets log permissions, and starts the services. Restarting x-ui can interrupt connections briefly. Generated HTTP settings (history disabled) replace custom FlowNote settings after backup; source-address masking in the access log is disabled for account correlation. Failure recovery restores the template and FlowNote settings without rolling the entire traffic database back; installed packages, log files, ACLs and rotation configuration may remain.
+The wizard previews and tests the candidate configuration, then asks before applying. It validates the panel, backs up to root-only /var/backups/flownote/, changes only the persisted Xray template, sets log permissions, and starts the services. Correct running query routes do not restart x-ui / Xray. Only first-time or repaired Xray settings require one x-ui restart, which can interrupt connections briefly. Identical FlowNote settings do not restart its active service either. Existing UI, history and performance settings are preserved; new configurations disable history; source-address masking in the access log is disabled for account correlation. Failure recovery restores the template and FlowNote settings without rolling the entire traffic database back; installed packages, log files, ACLs and rotation configuration may remain.
 
 The running Xray configuration is the first source for the log path; the persisted template is the fallback. When neither has a file log, setup uses /var/log/flownote-xray/access.log and creates a rotation fragment. Missing logrotate / acl tools are installed after confirmation via apt-get, dnf or apk. The regenerated runtime routes, source addresses and effective log path are checked after panel restart and before FlowNote starts. Existing logs need persistent read permissions across rotation. Do not use logs under /root or /home because the service uses ProtectHome.
 
@@ -43,3 +43,5 @@ The wizard grants log access so query connections can be associated with account
 
 
 Runtime: one asynchronous runtime thread with filesystem helpers, a reused 16 KiB log buffer, one-second idle log checks and immediate query-triggered wakeups. History is disabled in new configurations; no history file I/O when disabled. Upgrades preserve existing preferences. For a working deployment, omit --setup to upgrade only the program, without restarting or reconfiguring x-ui. To disable existing history, edit [history] enabled = false and restart flownote. MemoryMax=192M is an upper bound, not a reservation.
+
+Failures show the apply stage and private diagnostic directory (apply.failure.json / apply.stderr.log). Panel/API validation uses staging files before changing installed settings or services. Recovery attempts template restoration and x-ui restart independently. Restore a panel left stopped by an older wizard with `sudo systemctl start x-ui` before retrying.

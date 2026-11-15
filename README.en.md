@@ -8,7 +8,7 @@
 A minimal traffic dashboard for users sharing a 3x-ui server through individual accounts. No panel subscription or end-user login required.
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.6-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.7-246852)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [简体中文](README.md) · **English**
@@ -40,7 +40,7 @@ Working installations can upgrade without rerunning setup: use the installation 
 2. Install the fixed release:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.6/install.sh | sudo bash -s -- --version v0.3.6 --setup
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.7/install.sh | sudo bash -s -- --version v0.3.7 --setup
 ```
 
 The installer validates SHA-256, archive paths and binary version. First installs wait for configuration before starting. Existing configurations and secrets are preserved; active services restart on upgrade. You can download and inspect the script first, or use `--download-only ./flownote-download` without installing.
@@ -53,9 +53,11 @@ sudo flownote-setup
 sudo flownote-setup --detect
 ```
 
-Choose `2` to configure the HTTP entry. Standard installations only need an API token (hidden input) and confirmation. The wizard discovers panel paths and the actual port/base path, prefers the running Xray log over the persisted template, and selects an existing client to validate API access. A client identifier is requested only when none is found. HTTPS panels require an explicit verified URL. Use `sudo flownote-setup --advanced` for manual overrides. If the persisted template is missing, save the current configuration once in the panel's Xray settings and rerun.
+Choose `2` to configure the HTTP entry. Standard installations only need an API token (hidden input) and confirmation. The wizard discovers panel paths and the actual port/base path, prefers the running Xray log over the persisted template, and selects an existing client to validate API access. A client identifier is requested only when none is found. HTTPS URLs are inferred from the saved panel domain or a unique concrete certificate hostname; an existing HTTPS URL is reused when discovery is unavailable. Otherwise, enter a verified URL. Existing tokens are reused automatically. Use `sudo flownote-setup --advanced` for manual overrides. If the persisted template is missing, save the current configuration once in the panel's Xray settings and rerun.
 
-After confirmation, missing `logrotate` / `acl` tools are installed through apt-get, dnf or apk. After restarting the panel, the wizard verifies query routes and full source addresses, synchronizes the effective log path and checks read access before starting FlowNote. Shared log rotation must preserve permissions.
+After confirmation, missing `logrotate` / `acl` tools are installed through apt-get, dnf or apk. The wizard verifies the API using private staging files before replacing installed settings. Existing UI, history and performance preferences survive setup. Correct running Xray routes need no panel restart; identical settings need no FlowNote restart either. Only a new or repaired Xray configuration requires one `systemctl restart x-ui`, announced before confirmation. It then verifies query routes and full source addresses, synchronizes the effective log path and checks read access before starting FlowNote. Shared log rotation must preserve permissions.
+
+Failures report the exact apply stage and a root-only backup directory containing `apply.failure.json` and `apply.stderr.log`. Recovery attempts to restore the template and restart x-ui independently, even if template restoration fails. If an older failed setup left the panel stopped, run `sudo systemctl start x-ui` before retrying.
 
 The initial Xray check uses a private temporary access log, so a not-yet-created production log directory does not fail first-time setup. After confirmation, the wizard prepares the real log and checks the exact candidate before restarting x-ui. Only an explicit unsupported `finalRules` error offers a compatibility retry. On failure, root-only `xray-check.stdout.log` and `xray-check.stderr.log` retain raw diagnostics at the displayed paths; redact credentials before sharing errors.
 
@@ -146,6 +148,6 @@ The preview contains synthetic static pages and needs no configuration or panel.
 
 ## Uninstall
 
-Upgrade to v0.3.6, run `sudo flownote-setup`, then select **5**. Choose **1** and type `UNINSTALL` to remove the application, menu and service while retaining configuration, token, certificates, history, logs and backups. Choose **2** and type `DELETE` to additionally erase `/etc/flownote`, `/var/lib/flownote` and `/var/backups/flownote`, plus unused dedicated logs/rotation and the standard service account. Purging includes private certificates and all recovery backups and cannot be undone.
+Upgrade to v0.3.7, run `sudo flownote-setup`, then select **5**. Choose **1** and type `UNINSTALL` to remove the application, menu and service while retaining configuration, token, certificates, history, logs and backups. Choose **2** and type `DELETE` to additionally erase `/etc/flownote`, `/var/lib/flownote` and `/var/backups/flownote`, plus unused dedicated logs/rotation and the standard service account. Purging includes private certificates and all recovery backups and cannot be undone.
 
 Both modes validate and remove only recognized wizard query outbounds/rules from the persistent Xray template, preserving nodes and traffic counters. Matching original backups can restore only unchanged log keys. Candidate-check or Xray-restart failure prevents application deletion; conflicting custom/HTTPS query rules need manual handling. If Xray still uses the dedicated log, its files, rotation and service account remain even during purge. Custom paths, shared log ACLs and system journals are retained. Remove client routing rules first and revoke unused panel API tokens separately.

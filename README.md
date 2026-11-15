@@ -9,7 +9,7 @@
 面向 3x-ui 拼节点用户的轻量流量查询页。无需开启面板订阅，无需用户登录。
 
 [![CI](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml/badge.svg)](https://github.com/youbilin/FlowNote/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.6-246852)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.7-246852)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust&logoColor=white)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -73,7 +73,7 @@ FlowNote 提供一张只读的流量手记：用户先连接管理员分配的�
 已经能查流量的用户，只升级程序即可，**不必重新配置 3x-ui**：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.6/install.sh | sudo bash -s -- --version v0.3.6
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.7/install.sh | sudo bash -s -- --version v0.3.7
 ```
 
 升级保留原配置与历史开关；如想停用原先已开启的曲线，将 `/etc/flownote/config.toml` 中 `[history]` 下的 `enabled` 改为 `false`，再执行 `sudo systemctl restart flownote`。已存历史不会自动删除。systemd 的 `MemoryMax=192M` 是上限，不代表预占 192 MB。可用 `ps -C flownote -o pid,rss,nlwp,%cpu,cmd` 查看实际用量，RSS 单位为 KiB。测量方法与环境见 [验证记录](docs/TESTING.md)。同机 amd64 静态包短测：新版空闲 RSS 3.29 MiB（两版均为几 MiB），线程 23 → 2、8 秒空闲读取调用 78 → 8；20 逻辑 CPU、关闭历史，具体服务器用量以实测为准。
@@ -106,7 +106,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/relea
 支持 **Linux amd64 / arm64**，自动识别架构，使用预编译静态二进制，不需要在 VPS 上编译 Rust：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.6/install.sh | sudo bash -s -- --version v0.3.6 --setup
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/releases/download/v0.3.7/install.sh | sudo bash -s -- --version v0.3.7 --setup
 ```
 
 安装脚本下载固定版本、校验 SHA-256、包内路径和二进制版本，安装程序与 systemd 服务后打开配置菜单。**需要 Python 3（仅使用标准库）；缺少时先执行 `sudo apt-get install -y python3`。** 单独安装不改 Xray；选择菜单配置并确认后，才会合并查询路由并启动服务。安装或升级保留已有配置和数据；活动服务升级会短暂重启，向导应用配置时另有备份与确认。
@@ -114,14 +114,14 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/youbilin/FlowNote/relea
 想先审阅脚本，或只下载离线包：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.6/install.sh
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://github.com/youbilin/FlowNote/releases/download/v0.3.7/install.sh
 less install.sh
-sudo bash install.sh --version v0.3.6 --setup
+sudo bash install.sh --version v0.3.7 --setup
 # 只下载并校验，不安装：
-bash install.sh --version v0.3.6 --download-only ./flownote-download
+bash install.sh --version v0.3.7 --download-only ./flownote-download
 ```
 
-[预编译包及 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.6)。清单用于发现下载损坏，不是独立签名。
+[预编译包及 SHA256SUMS](https://github.com/youbilin/FlowNote/releases/tag/v0.3.7)。清单用于发现下载损坏，不是独立签名。
 
 ### 交互式配置：已经安装 3x-ui，直接用菜单
 
@@ -148,24 +148,29 @@ sudo flownote-setup
 | 面板目录 | `/usr/local/x-ui` |
 | 面板数据库 | `/etc/x-ui/x-ui.db`，只读取必要设置 |
 | Xray 内核 | 自动识别 `/usr/local/x-ui/bin/` 中的架构对应可执行文件 |
-| 面板地址 | 从 SQLite 读取实际端口、访问路径；面板启用 HTTPS 时要求输入证书可验证的实际地址 |
+| 面板地址 | 从 SQLite 读取实际端口、访问路径；HTTPS 优先使用面板保存的域名或证书中唯一明确域名，无法识别时复用已存 HTTPS 地址或提示输入 |
 | 访问日志 | 优先读取实际运行配置的绝对路径；未配置时使用 `/var/log/flownote-xray/access.log` |
 
-**正常安装只需粘贴 API Token，再确认应用。** 已有 Token 可以留空保留。面板地址、实际运行日志和用于验证 API 的已有客户端标识都会自动选择，不需要填写邮箱。
+**首次配置只需粘贴 API Token，再确认应用；再次配置自动复用已保存的 Token。**面板地址、实际运行日志和用于验证 API 的已有客户端标识都会自动选择，不需要填写邮箱。
 
 | 自动处理 | 说明 |
 |---|---|
-| 面板地址 | 读取本机实际端口和访问路径；HTTPS 或自定义监听地址才需要手动填写证书可验证的地址 |
+| 面板地址 | 读取本机实际端口和访问路径；HTTPS 从面板域名 / 证书识别，无法确定才提示填写；始终验证证书 |
 | 日志位置 | 优先读取 Xray 运行配置的真实路径，再看持久化模板；均未开启时使用 `/var/log/flownote-xray/access.log` |
 | 客户端标识 | 从已有账号选择一个验证 API；不是注册邮箱，不发送邮件，没有账号时才提示输入 |
 | 日志依赖 | 确认后按需安装 `logrotate`，使用共享日志时补齐 `acl`；支持 apt-get、dnf、apk |
-| 启动校验 | 面板重启后重新核对路由、来源地址和实际日志路径，并同步 FlowNote 配置 |
+| 按需应用 | 已有查询路由正确时不重启 3x-ui / Xray；配置和 Token 一致且服务运行中时也不重启 FlowNote |
+| 启动校验 | 先验证面板接口，再按需重载；核对实际路由、来源地址和日志路径，并同步 FlowNote 配置 |
 
 需要手动覆盖地址、日志或验证账号时，运行 `sudo flownote-setup --advanced`。无需开启订阅。
 
+向导保留已有页面、历史曲线和性能配置，只更新检测到的面板地址、日志路径和你明确输入的 Token。**只有首次添加 / 修复 Xray 查询路由或日志设置时，才执行一次 `systemctl restart x-ui`**，可能短暂断开节点；确认前会显示是否需要重载。已取消旧版无条件“停止 → 写入 → 启动”的流程。单纯修正 FlowNote 配置只重启 FlowNote。
+
+应用失败会显示具体阶段及 `/var/backups/flownote/…` 诊断目录，原始错误在仅 root 可读的 `apply.stderr.log`，阶段信息在 `apply.failure.json`。验证面板 / Token 失败时不替换正在使用的配置，也不重启服务；重载后失败会分别尝试恢复模板、x-ui 和 FlowNote。若旧版失败后面板已停止，先执行 `sudo systemctl start x-ui`，确认面板恢复后再用新版菜单。
+
 若提示“未找到持久化 Xray 模板”，先在面板的 **Xray 设置 / 配置** 页保存一次现有配置，再重新运行。向导不会拿面板生成的运行时 `config.json` 覆盖持久化模板。
 
-确认前会检查 Xray 候选配置并显示变更。输入 `y` 后先验证面板接口，再备份并修改数据库中的 Xray 模板这一项，合并专用出站与路由，设置日志权限，启动 FlowNote。原节点、默认出站、面板登录与订阅开关保留；**应用期间 x-ui 会短暂重启，连接可能中断。** 向导生成 HTTP 轻量配置（历史曲线关闭），已有 FlowNote 自定义配置会先备份。原日志的地址掩码会关闭，以保留关联账号所需的完整来源 IP:端口。
+确认前显示变更；需要修改 Xray 时检查候选配置。输入 `y` 后先用私有候选配置验证面板接口，再备份并按需修改数据库中的 Xray 模板这一项，设置日志权限并启动 FlowNote。原节点、默认出站、面板登录与订阅开关保留。新配置默认关闭历史；已有显示、历史与性能设置保留。查询身份关联要求日志保留完整来源 IP:端口，必要时关闭地址掩码。
 
 备份在 `/var/backups/flownote/<时间-随机后缀>/`，仅 root 可读，包含原数据库及已有的 FlowNote 配置 / Token。失败时尝试只恢复 Xray 模板与 FlowNote 配置，不用整库回滚流量统计；已安装的系统包、创建的日志文件、ACL 或轮转配置可能保留。备份含敏感信息，请勿上传公开仓库。
 
@@ -188,7 +193,7 @@ sudo flownote-setup --xui-dir /实际面板目录 --db /实际目录/x-ui.db --c
 
 ### 卸载与清理
 
-运行 `sudo flownote-setup`，选择 **`5. 卸载与清理`**。旧版本没有这个菜单时，先用上面的安装命令升级到 v0.3.6。
+运行 `sudo flownote-setup`，选择 **`5. 卸载与清理`**。旧版本没有这个菜单时，先用上面的安装命令升级到 v0.3.7。
 
 ```text
 卸载与清理
