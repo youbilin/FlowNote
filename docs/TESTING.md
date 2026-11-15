@@ -7,6 +7,15 @@
 - 34 个 Rust 单元测试、9 组安装器检查、5 组真实 Xray v26.11.9 检查通过；fmt、clippy、shell 语法及 shellcheck 通过。
 - 本地 release 构建通过 40 项 HTTP 和 42 项 HTTPS / PROXY 集成检查。
 
+## v0.3.7 公开发布包复核
+
+- 实现提交 `1c253a99950af6071181b8fdb9c697472c0fd749`；GitHub CI `43665416003`、双架构发布 `43665418189` 均成功。
+- 从 GitHub 公开 Release 下载 amd64 / arm64 包、install.sh 和 SHA256SUMS，核对三个资产的 SHA-256；验证两种架构均为无解释器依赖的静态 ELF，包内包含 setup.py / setup.sh。
+- 下载的 amd64 二进制报告 0.3.7，通过 40 项 HTTP、42 项 HTTPS / PROXY 集成检查；直接对包内向导运行全部 84 组回归与 5 组真实 Xray 检查，均通过。
+- 使用下载的实际 Rust 程序和包内向导，对本机模拟面板验证暂存配置：有效 Token 成功且不重启；无效 Token 失败且活动配置 / Token 保持原样。系统服务命令仍为模拟，不操作主机服务。
+- 包内 certificate_host 对真实 openssl 生成的单域名、多域名和通配符证书检测通过；实际 root PTY 进入卸载子菜单后返回退出，未修改主机配置。
+- 下载的 install.sh 实际执行 --download-only，成功从公开 Release 下载并校验当前 amd64 包。
+
 以下 v0.3.6 正式包测量保留为历史基线，本次未修改运行时调度或资源策略。
 
 # v0.3.6 验证记录
